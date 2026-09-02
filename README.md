@@ -35,7 +35,7 @@ The SQLite database separates:
 - `match_candidates`: ambiguous metadata matches held for manual review.
 - `sync_runs`: sync history and result counts.
 
-## Current milestone: 0.9 - Manual unmatched-track resolution
+## Current milestone: 1.0 - Safe TIDAL sync planning
 
 Implemented:
 
@@ -69,11 +69,15 @@ Implemented:
 - Interactive `review` command for approving or rejecting ambiguous metadata candidates.
 - Interactive `resolve-unmatched` command with custom TIDAL searches and explicit numbered-result approval.
 - Automatic TIDAL rate-limit pacing and retry handling during catalogue imports.
+- Read-only sync planner that preserves Spotify playlist order and duplicate entries.
+- `sync --dry-run` preview showing which TIDAL playlists will be created or updated.
+- Per-playlist reporting of unresolved tracks that will be skipped rather than silently substituted.
+- Write execution remains intentionally locked until the dry-run plan is reviewed.
 
 Next:
 
-1. Create and populate managed TIDAL playlist mirrors.
-2. Report any unresolved tracks that cannot be mirrored to TIDAL.
+1. Create and populate managed TIDAL playlist mirrors from the verified plan.
+2. Persist Spotify playlist -> TIDAL playlist IDs immediately after creation for resumability.
 3. Implement delta sync for additions, removals, renames, and playlist lifecycle.
 
 ## Local setup

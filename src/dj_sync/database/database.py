@@ -146,6 +146,33 @@ class Database:
                 """
             ).fetchall()
 
+    def list_managed_playlists_for_sync(self) -> list[sqlite3.Row]:
+        with self.connect() as connection:
+            return connection.execute(
+                """
+                SELECT id, spotify_playlist_id, spotify_name,
+                       tidal_playlist_id, tidal_name, last_synced_at
+                FROM playlists
+                WHERE status = 'managed' AND managed_by_dj_sync = 1
+                ORDER BY spotify_name COLLATE NOCASE
+                """
+            ).fetchall()
+
+    def list_playlist_tracks_for_sync(self, playlist_id: int) -> list[sqlite3.Row]:
+        """Return one playlist snapshot in Spotify order with TIDAL mappings."""
+        with self.connect() as connection:
+            return connection.execute(
+                """
+                SELECT pt.spotify_track_id, pt.position, t.title, t.artist,
+                       t.tidal_track_id, t.match_method, t.match_score
+                FROM playlist_tracks pt
+                JOIN tracks t ON t.spotify_track_id = pt.spotify_track_id
+                WHERE pt.playlist_id = ?
+                ORDER BY pt.position
+                """,
+                (playlist_id,),
+            ).fetchall()
+
     def replace_spotify_playlist_snapshot(
         self,
         spotify_playlist_id: str,

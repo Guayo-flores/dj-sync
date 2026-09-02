@@ -14,6 +14,7 @@ from dj_sync.tidal.matcher import match_unmatched_tracks_by_isrc
 from dj_sync.tidal.manual_resolution import resolve_unmatched_tracks
 from dj_sync.tidal.metadata_matcher import match_unmatched_tracks_by_metadata
 from dj_sync.tidal.review import review_match_candidates
+from dj_sync.sync.planner import build_sync_plan
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -311,11 +312,31 @@ def main() -> int:
 
     if args.command == "sync":
         database.initialize()
-        mode = "DRY RUN" if args.dry_run else "SYNC"
-        print(f"DJ Sync — {mode}")
-        managed = [row for row in database.list_playlists() if row["status"] == "managed"]
-        print(f"Managed Spotify playlists: {len(managed)}")
-        print("TIDAL authentication and track matching are the next milestones.")
+        plan = build_sync_plan(database)
+        if not args.dry_run:
+            print("DJ Sync — SYNC")
+            print("Write execution is intentionally locked until the dry-run plan is verified.")
+            print("Run: dj-sync sync --dry-run")
+            return 2
+
+        print("DJ Sync — TIDAL sync preview (DRY RUN)")
+        print(f"Managed playlists:       {len(plan.playlists)}")
+        print(f"TIDAL playlists to make: {plan.playlists_to_create}")
+        print(f"Mapped playlist entries: {plan.mapped_entries}")
+        print(f"Unmatched entries:       {plan.unmatched_entries}")
+        print(f"Unique unmatched tracks: {plan.unique_unmatched_tracks}")
+        print()
+
+        for playlist in plan.playlists:
+            action = "CREATE" if playlist.action == "create" else "UPDATE"
+            print(
+                f"  {action:<6} {playlist.spotify_name}: "
+                f"{playlist.mapped_entries}/{playlist.playlist_entries} mapped"
+            )
+            for item in playlist.unmatched_entries:
+                print(f"         ! skip #{item.position + 1}: {item.artist} — {item.title}")
+
+        print("\nDry run only — no TIDAL playlists or tracks were changed.")
         return 0
 
     build_parser().print_help()
