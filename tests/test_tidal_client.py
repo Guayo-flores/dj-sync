@@ -351,6 +351,67 @@ def test_iter_owned_playlists_filters_for_authenticated_owner() -> None:
     assert playlists[0].id == "owned-1"
 
 
+
+
+def test_iter_owned_playlists_resolves_relative_next_link_against_api_base() -> None:
+    session = FakeSession()
+    session.queue(
+        {
+            "data": [playlist_payload("owned-1")["data"]],
+            "links": {"next": "/playlists?filter%5Bowners.id%5D=me&page%5Bcursor%5D=abc"},
+        }
+    )
+    session.queue(
+        {
+            "data": [playlist_payload("owned-2")["data"]],
+            "links": {},
+        }
+    )
+    client = TidalClient(
+        "access-123",
+        session=session,
+        base_url="https://example.test/v2",
+    )
+
+    playlists = list(client.iter_owned_playlists())
+
+    assert [playlist.id for playlist in playlists] == ["owned-1", "owned-2"]
+    assert session.calls[1][1] == (
+        "https://example.test/v2/playlists?"
+        "filter%5Bowners.id%5D=me&page%5Bcursor%5D=abc"
+    )
+    assert session.calls[1][2]["params"] is None
+
+
+def test_iter_playlist_items_resolves_relative_next_link_against_api_base() -> None:
+    session = FakeSession()
+    session.queue(
+        {
+            "data": [{"type": "tracks", "id": "track-1", "meta": {"itemId": "item-1"}}],
+            "links": {"next": "/playlists/playlist-1/relationships/items?page%5Bcursor%5D=xyz"},
+        }
+    )
+    session.queue(
+        {
+            "data": [{"type": "tracks", "id": "track-2", "meta": {"itemId": "item-2"}}],
+            "links": {},
+        }
+    )
+    client = TidalClient(
+        "access-123",
+        session=session,
+        base_url="https://example.test/v2",
+    )
+
+    items = list(client.iter_playlist_items("playlist-1"))
+
+    assert [item.id for item in items] == ["track-1", "track-2"]
+    assert session.calls[1][1] == (
+        "https://example.test/v2/playlists/playlist-1/relationships/items?"
+        "page%5Bcursor%5D=xyz"
+    )
+
+
 def test_add_playlist_tracks_can_insert_before_existing_item() -> None:
     session = FakeSession()
     session.queue({"data": [{"type": "tracks", "id": "track-new"}], "meta": {"skipped": []}})

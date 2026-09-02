@@ -239,6 +239,16 @@ class TidalClient:
             return str(next_link["href"])
         return None
 
+    def _resolve_api_link(self, link: str | None) -> str | None:
+        if link is None:
+            return None
+        if link.startswith(("http://", "https://")):
+            return link
+        # TIDAL pagination links may be API-relative (for example
+        # /playlists?...). They are relative to the configured v2 API base,
+        # not the host root, so preserve the /v2 prefix in self.base_url.
+        return f"{self.base_url}/{link.lstrip('/')}"
+
     def iter_owned_playlists(self):
         url: str | None = f"{self.base_url}/playlists"
         params: dict[str, Any] | None = {"filter[owners.id]": ["me"]}
@@ -247,7 +257,7 @@ class TidalClient:
             payload = response.json()
             for resource in payload.get("data") or []:
                 yield TidalPlaylist.from_resource(resource)
-            url = self._next_link(payload)
+            url = self._resolve_api_link(self._next_link(payload))
             # The next link already contains TIDAL's opaque cursor and filters.
             params = None
 
@@ -258,7 +268,7 @@ class TidalClient:
             payload = response.json()
             for resource in payload.get("data") or []:
                 yield TidalPlaylistItem.from_resource(resource)
-            url = self._next_link(payload)
+            url = self._resolve_api_link(self._next_link(payload))
 
     def add_playlist_tracks(
         self,
