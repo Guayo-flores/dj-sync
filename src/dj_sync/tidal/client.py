@@ -165,7 +165,7 @@ class TidalClient:
             # once, persist the new token through the callback, and replay the
             # original request. A genuine permission error will still surface on
             # the retried request instead of looping forever.
-            if response.status_code in {401, 403} and not auth_refreshed:
+            if response.status_code == 401 and not auth_refreshed:
                 self._refresh_access_token_once()
                 auth_refreshed = True
                 continue
@@ -205,7 +205,7 @@ class TidalClient:
                 kwargs["json"] = json
             response = request(url, **kwargs)
 
-            if response.status_code in {401, 403} and not auth_refreshed:
+            if response.status_code == 401 and not auth_refreshed:
                 self._refresh_access_token_once()
                 auth_refreshed = True
                 continue

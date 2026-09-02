@@ -282,22 +282,29 @@ def execute_incremental_sync(
     """Make managed TIDAL playlists exactly mirror the mapped Spotify snapshot."""
     results: list[PlaylistIncrementalResult] = []
 
-    owned_by_name: dict[str, list[str]] = {}
-    for tidal_playlist in client.iter_owned_playlists():
-        owned_by_name.setdefault(tidal_playlist.name.casefold(), []).append(tidal_playlist.id)
-    collisions = [
-        playlist.spotify_name
-        for playlist in plan.playlists
-        if playlist.tidal_playlist_id is None
-        and playlist.spotify_name.casefold() in owned_by_name
-    ]
-    if collisions:
-        names = ", ".join(f'"{name}"' for name in collisions)
-        raise RuntimeError(
-            "Existing TIDAL playlist name collision(s): "
-            + names
-            + ". DJ Sync made no changes."
-        )
+    # Listing every owned TIDAL playlist requires playlists.read and is only
+    # needed before creating a brand-new mirror (to avoid same-name duplicates).
+    # Existing mapped playlists already have stable TIDAL IDs, so updates/renames
+    # should not depend on a full-account collection scan.
+    unmapped = [playlist for playlist in plan.playlists if playlist.tidal_playlist_id is None]
+    if unmapped:
+        owned_by_name: dict[str, list[str]] = {}
+        for tidal_playlist in client.iter_owned_playlists():
+            owned_by_name.setdefault(tidal_playlist.name.casefold(), []).append(
+                tidal_playlist.id
+            )
+        collisions = [
+            playlist.spotify_name
+            for playlist in unmapped
+            if playlist.spotify_name.casefold() in owned_by_name
+        ]
+        if collisions:
+            names = ", ".join(f'"{name}"' for name in collisions)
+            raise RuntimeError(
+                "Existing TIDAL playlist name collision(s): "
+                + names
+                + ". DJ Sync made no changes."
+            )
 
     for playlist in plan.playlists:
         tidal_playlist_id = playlist.tidal_playlist_id

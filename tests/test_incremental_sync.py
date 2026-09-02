@@ -190,3 +190,20 @@ def test_incremental_executor_creates_newly_managed_playlist(tmp_path) -> None:
     created_id = next(iter(client.playlists))
     assert client.playlists[created_id].name == "New Playlist"
     assert [item.id for item in client.items[created_id]] == ["tidal-a"]
+
+def test_existing_mapped_playlist_update_does_not_scan_all_owned_playlists(tmp_path) -> None:
+    database = prepared_database(tmp_path, ["a"], name="New Spotify Name")
+
+    class NoOwnedScanClient(FakeIncrementalTidalClient):
+        def iter_owned_playlists(self):
+            raise AssertionError("Mapped playlist updates must not scan all owned playlists")
+
+    client = NoOwnedScanClient()
+    client.seed("tidal-playlist", "Old TIDAL Name", ["tidal-a"])
+
+    plan = build_incremental_sync_plan(client=client, database=database)
+    summary = execute_incremental_sync(client=client, database=database, plan=plan)
+
+    assert summary.playlists_renamed == 1
+    assert client.playlists["tidal-playlist"].name == "New Spotify Name"
+

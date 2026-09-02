@@ -69,25 +69,26 @@ def execute_initial_sync(
     # Never create a duplicate merely because DJ Sync has no mapping yet. A
     # same-name playlist in the user's TIDAL account may be valuable/manual, so
     # stop before any writes and let a later linking flow resolve it explicitly.
-    owned_by_name: dict[str, list[str]] = {}
-    for tidal_playlist in client.iter_owned_playlists():
-        owned_by_name.setdefault(tidal_playlist.name.casefold(), []).append(
-            tidal_playlist.id
-        )
-    collisions = [
-        playlist.spotify_name
-        for playlist in plan.playlists
-        if playlist.tidal_playlist_id is None
-        and playlist.spotify_name.casefold() in owned_by_name
-    ]
-    if collisions:
-        names = ", ".join(f'"{name}"' for name in collisions)
-        raise RuntimeError(
-            "Existing TIDAL playlist name collision(s): "
-            + names
-            + ". DJ Sync made no changes. Link/reuse of existing playlists must "
-              "be resolved explicitly instead of creating duplicates."
-        )
+    unmapped = [playlist for playlist in plan.playlists if playlist.tidal_playlist_id is None]
+    if unmapped:
+        owned_by_name: dict[str, list[str]] = {}
+        for tidal_playlist in client.iter_owned_playlists():
+            owned_by_name.setdefault(tidal_playlist.name.casefold(), []).append(
+                tidal_playlist.id
+            )
+        collisions = [
+            playlist.spotify_name
+            for playlist in unmapped
+            if playlist.spotify_name.casefold() in owned_by_name
+        ]
+        if collisions:
+            names = ", ".join(f'"{name}"' for name in collisions)
+            raise RuntimeError(
+                "Existing TIDAL playlist name collision(s): "
+                + names
+                + ". DJ Sync made no changes. Link/reuse of existing playlists must "
+                  "be resolved explicitly instead of creating duplicates."
+            )
 
     for playlist in plan.playlists:
         tidal_playlist_id = playlist.tidal_playlist_id

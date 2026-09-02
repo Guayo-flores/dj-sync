@@ -473,10 +473,10 @@ def test_update_playlist_name_uses_playlist_patch() -> None:
     assert updated.name == "New Name"
 
 
-def test_owned_playlist_read_refreshes_rejected_user_token_once() -> None:
+def test_owned_playlist_read_refreshes_401_user_token_once() -> None:
     session = FakeSession()
-    rejected = session.queue({"errors": [{"status": "403"}]})
-    rejected.status_code = 403
+    rejected = session.queue({"errors": [{"status": "401"}]})
+    rejected.status_code = 401
     session.queue({"data": [playlist_payload("owned-1")["data"]], "links": {}})
     refresh_calls: list[str] = []
 
@@ -496,6 +496,24 @@ def test_owned_playlist_read_refreshes_rejected_user_token_once() -> None:
     assert refresh_calls == ["refresh"]
     assert session.calls[0][2]["headers"]["Authorization"] == "Bearer stale-access"
     assert session.calls[1][2]["headers"]["Authorization"] == "Bearer fresh-access"
+
+
+def test_403_does_not_trigger_token_refresh() -> None:
+    session = FakeSession()
+    forbidden = session.queue({"errors": [{"status": "403"}]})
+    forbidden.status_code = 403
+    refresh_calls: list[str] = []
+    client = TidalClient(
+        "valid-access",
+        session=session,
+        token_refresher=lambda: refresh_calls.append("refresh") or "fresh-access",
+    )
+
+    list(client.iter_owned_playlists())
+
+    assert refresh_calls == []
+    assert forbidden.raise_for_status_called
+    assert len(session.calls) == 1
 
 
 def test_playlist_mutation_refreshes_auth_and_reuses_idempotency_key() -> None:
