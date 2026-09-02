@@ -42,6 +42,9 @@ class FakeSession:
     def delete(self, url: str, **kwargs: Any) -> FakeResponse:
         return self._next("DELETE", url, kwargs)
 
+    def patch(self, url: str, **kwargs: Any) -> FakeResponse:
+        return self._next("PATCH", url, kwargs)
+
 
 def playlist_payload(playlist_id: str = "playlist-123") -> dict[str, Any]:
     return {
@@ -346,3 +349,64 @@ def test_iter_owned_playlists_filters_for_authenticated_owner() -> None:
     assert url.endswith("/playlists")
     assert kwargs["params"] == {"filter[owners.id]": ["me"]}
     assert playlists[0].id == "owned-1"
+
+
+def test_add_playlist_tracks_can_insert_before_existing_item() -> None:
+    session = FakeSession()
+    session.queue({"data": [{"type": "tracks", "id": "track-new"}], "meta": {"skipped": []}})
+    client = TidalClient("access-123", session=session)
+
+    client.add_playlist_tracks(
+        "playlist-1", ["track-new"], position_before="item-anchor"
+    )
+
+    _, _, kwargs = session.calls[0]
+    assert kwargs["json"]["meta"] == {"positionBefore": "item-anchor"}
+
+
+def test_remove_playlist_items_uses_occurrence_item_ids() -> None:
+    from dj_sync.tidal.client import TidalPlaylistItem
+
+    session = FakeSession()
+    session.queue({"meta": {}})
+    client = TidalClient("access-123", session=session)
+
+    client.remove_playlist_items(
+        "playlist-1",
+        [TidalPlaylistItem(id="track-1", type="tracks", item_id="occurrence-9")],
+    )
+
+    method, url, kwargs = session.calls[0]
+    assert method == "DELETE"
+    assert url.endswith("/playlists/playlist-1/relationships/items")
+    assert kwargs["json"] == {
+        "data": [
+            {
+                "type": "tracks",
+                "id": "track-1",
+                "meta": {"itemId": "occurrence-9"},
+            }
+        ]
+    }
+
+
+def test_update_playlist_name_uses_playlist_patch() -> None:
+    session = FakeSession()
+    session.queue(
+        {
+            "data": {
+                "id": "playlist-1",
+                "type": "playlists",
+                "attributes": {"name": "New Name"},
+            }
+        }
+    )
+    client = TidalClient("access-123", session=session)
+
+    updated = client.update_playlist_name("playlist-1", "New Name")
+
+    method, url, kwargs = session.calls[0]
+    assert method == "PATCH"
+    assert url.endswith("/playlists/playlist-1")
+    assert kwargs["json"]["data"]["attributes"] == {"name": "New Name"}
+    assert updated.name == "New Name"

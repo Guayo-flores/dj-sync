@@ -35,7 +35,7 @@ The SQLite database separates:
 - `match_candidates`: ambiguous metadata matches held for manual review.
 - `sync_runs`: sync history and result counts.
 
-## Current milestone: 1.1 - Resumable initial TIDAL sync
+## Current milestone: 1.2 - Incremental Spotify-to-TIDAL sync
 
 Implemented:
 
@@ -79,12 +79,20 @@ Implemented:
 - Playlist population in API-safe batches of up to 50 tracks while preserving order and duplicates.
 - Resumable initial sync: interrupted playlists only append a missing tail when the existing TIDAL sequence is an exact prefix.
 - Safety stop instead of overwriting a TIDAL playlist that has diverged from the expected state.
+- One-command sync refreshes the latest Spotify snapshots before planning changes.
+- New Spotify tracks are matched automatically by exact ISRC, then conservative metadata fallback.
+- Live TIDAL comparison detects additions, removals, duplicate occurrences, and reorder changes.
+- Occurrence-safe TIDAL removals use playlist `itemId` metadata rather than deleting every copy of a track.
+- Ordered insertions use TIDAL `positionBefore`, preserving Spotify playlist order.
+- Spotify playlist renames are mirrored to already-managed TIDAL playlists.
+- Scoped `--playlist` sync mode enables controlled testing on a single managed playlist.
+- Post-write verification confirms the final TIDAL sequence exactly matches the mapped Spotify sequence.
 
 Next:
 
-1. Implement full delta reconciliation for additions, removals, and reorder changes.
-2. Mirror Spotify playlist renames.
-3. Add safe pause/delete lifecycle handling for managed playlists.
+1. Add safe pause/delete lifecycle handling for managed playlists.
+2. Add automatic OAuth token refresh for unattended scheduled runs.
+3. Add Windows Task Scheduler / cloud scheduling support.
 
 ## Local setup
 
@@ -165,13 +173,20 @@ Manually search and resolve any recordings that still do not have a TIDAL mappin
 dj-sync resolve-unmatched
 ```
 
-Preview the initial sync:
+Preview the latest incremental sync. The command refreshes Spotify first, matches only newly seen tracks, and compares against the live managed TIDAL mirrors:
 
 ```bash
 dj-sync sync --dry-run
 ```
 
-Apply the reviewed plan:
+For a controlled real-account test, scope the preview and apply to one playlist:
+
+```bash
+dj-sync sync --dry-run --playlist "Hype Reggueton"
+dj-sync sync --apply --playlist "Hype Reggueton"
+```
+
+Apply all reviewed incremental changes:
 
 ```bash
 dj-sync sync --apply

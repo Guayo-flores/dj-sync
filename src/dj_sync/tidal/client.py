@@ -261,22 +261,30 @@ class TidalClient:
             url = self._next_link(payload)
 
     def add_playlist_tracks(
-        self, playlist_id: str, track_ids: list[str]
+        self,
+        playlist_id: str,
+        track_ids: list[str],
+        *,
+        position_before: str | None = None,
     ) -> TidalPlaylistAddResult:
         if not track_ids:
             return TidalPlaylistAddResult(added=0)
         if len(track_ids) > 50:
             raise ValueError("TIDAL accepts at most 50 playlist items per add request")
 
+        payload: dict[str, Any] = {
+            "data": [
+                {"type": "tracks", "id": str(track_id)}
+                for track_id in track_ids
+            ]
+        }
+        if position_before is not None:
+            payload["meta"] = {"positionBefore": position_before}
+
         response = self._mutation_with_rate_limit_retry(
             "post",
             f"{self.base_url}/playlists/{playlist_id}/relationships/items",
-            json={
-                "data": [
-                    {"type": "tracks", "id": str(track_id)}
-                    for track_id in track_ids
-                ]
-            },
+            json=payload,
         )
         payload = response.json()
         skipped = tuple(
@@ -289,6 +297,50 @@ class TidalClient:
         if added == 0 and track_ids and "data" not in payload:
             added = len(track_ids) - len(skipped)
         return TidalPlaylistAddResult(added=added, skipped_ids=skipped)
+
+
+    def remove_playlist_items(
+        self, playlist_id: str, items: list[TidalPlaylistItem]
+    ) -> None:
+        if not items:
+            return
+        if len(items) > 50:
+            raise ValueError("TIDAL accepts at most 50 playlist items per remove request")
+        if any(item.item_id is None for item in items):
+            raise ValueError("TIDAL playlist itemId is required to remove an occurrence")
+
+        self._mutation_with_rate_limit_retry(
+            "delete",
+            f"{self.base_url}/playlists/{playlist_id}/relationships/items",
+            json={
+                "data": [
+                    {
+                        "type": item.type,
+                        "id": item.id,
+                        "meta": {"itemId": item.item_id},
+                    }
+                    for item in items
+                ]
+            },
+        )
+
+    def update_playlist_name(self, playlist_id: str, name: str) -> TidalPlaylist:
+        response = self._mutation_with_rate_limit_retry(
+            "patch",
+            f"{self.base_url}/playlists/{playlist_id}",
+            json={
+                "data": {
+                    "type": "playlists",
+                    "id": playlist_id,
+                    "attributes": {"name": name},
+                }
+            },
+        )
+        payload = response.json()
+        data = payload.get("data")
+        if isinstance(data, dict) and data.get("id") is not None:
+            return TidalPlaylist.from_resource(data)
+        return self.get_playlist(playlist_id)
 
     def get_tracks_by_isrc(self, isrcs: list[str]) -> list[TidalTrack]:
         if not isrcs:

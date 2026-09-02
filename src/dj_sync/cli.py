@@ -14,8 +14,7 @@ from dj_sync.tidal.matcher import match_unmatched_tracks_by_isrc
 from dj_sync.tidal.manual_resolution import resolve_unmatched_tracks
 from dj_sync.tidal.metadata_matcher import match_unmatched_tracks_by_metadata
 from dj_sync.tidal.review import review_match_candidates
-from dj_sync.sync.planner import build_sync_plan
-from dj_sync.sync.executor import execute_initial_sync
+from dj_sync.sync.incremental import build_incremental_sync_plan, execute_incremental_sync
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -81,6 +80,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--apply",
         action="store_true",
         help="Apply the verified plan to managed TIDAL playlists.",
+    )
+    sync_parser.add_argument(
+        "--playlist",
+        default=None,
+        help="Only preview/apply one managed playlist by exact name.",
     )
     return parser
 
@@ -319,60 +323,106 @@ def main() -> int:
 
     if args.command == "sync":
         database.initialize()
-        plan = build_sync_plan(database)
+
+        # A sync command always refreshes Spotify first. The local SQLite snapshot
+        # is a cache/state store; Spotify remains the source of truth.
+        spotify_token = _spotify_token(settings)
+        spotify_client = SpotifyClient(spotify_token.access_token)
+        ingest_summary = ingest_managed_playlists(client=spotify_client, database=database)
+
+        tidal_token = _tidal_token(settings)
+        tidal_client = TidalClient(tidal_token.access_token)
+
+        # Only newly seen/unmapped recordings flow through these passes. Existing
+        # Spotify -> TIDAL mappings are reused globally across every playlist.
+        isrc_summary = match_unmatched_tracks_by_isrc(
+            client=tidal_client, database=database
+        )
+        metadata_summary = match_unmatched_tracks_by_metadata(
+            client=tidal_client, database=database
+        )
+
+        plan = build_incremental_sync_plan(
+            client=tidal_client,
+            database=database,
+            playlist_name=args.playlist,
+        )
+
+        print("DJ Sync — refreshed source state")
+        print(f"Spotify playlists refreshed: {len(ingest_summary.playlists)}")
+        print(f"Spotify playlist entries:    {ingest_summary.total_tracks_saved}")
+        print(f"New exact ISRC matches:      {isrc_summary.matched}")
+        print(f"New metadata matches:        {metadata_summary.automatic}")
+        if metadata_summary.review:
+            print(f"New matches needing review:  {metadata_summary.review}")
+        print()
 
         if args.dry_run:
-            print("DJ Sync — TIDAL sync preview (DRY RUN)")
-            print(f"Managed playlists:       {len(plan.playlists)}")
-            print(f"TIDAL playlists to make: {plan.playlists_to_create}")
-            print(f"Mapped playlist entries: {plan.mapped_entries}")
-            print(f"Unmatched entries:       {plan.unmatched_entries}")
-            print(f"Unique unmatched tracks: {plan.unique_unmatched_tracks}")
+            scope = f' — {args.playlist}' if args.playlist else ""
+            print(f"DJ Sync — incremental preview (DRY RUN){scope}")
+            print(f"Playlists checked:     {len(plan.playlists)}")
+            print(f"Playlists changed:     {plan.playlists_changed}")
+            print(f"Playlists to create:   {plan.playlists_to_create}")
+            print(f"Tracks to add:         {plan.tracks_to_add}")
+            print(f"Tracks to remove:      {plan.tracks_to_remove}")
+            print(f"Unmatched entries:     {plan.unmatched_entries}")
             print()
 
             for playlist in plan.playlists:
+                if playlist.action == "unchanged":
+                    print(f"  = {playlist.spotify_name}: unchanged")
+                    continue
                 action = "CREATE" if playlist.action == "create" else "UPDATE"
+                rename = " + rename" if playlist.rename else ""
                 print(
                     f"  {action:<6} {playlist.spotify_name}: "
-                    f"{playlist.mapped_entries}/{playlist.playlist_entries} mapped"
+                    f"+{playlist.tracks_to_add} -{playlist.tracks_to_remove}{rename}"
                 )
                 for item in playlist.unmatched_entries:
-                    print(f"         ! skip #{item.position + 1}: {item.artist} — {item.title}")
+                    print(
+                        f"         ! skip #{item.position + 1}: "
+                        f"{item.artist} — {item.title}"
+                    )
 
-            print("\nDry run only — no TIDAL playlists or tracks were changed.")
+            print("\nDry run only — TIDAL was not modified.")
             return 0
 
         if not args.apply:
             print("DJ Sync — SYNC")
             print("Choose an explicit mode:")
-            print("  dj-sync sync --dry-run   # preview only")
-            print("  dj-sync sync --apply     # create/populate TIDAL mirrors")
+            print("  dj-sync sync --dry-run")
+            print("  dj-sync sync --apply")
             return 2
 
-        token = _tidal_token(settings)
-        client = TidalClient(token.access_token)
-        print("DJ Sync — APPLYING TIDAL SYNC")
-        print(
-            "Only DJ Sync-managed playlist mappings are touched. Existing playlists "
-            "that diverge from the expected state are stopped, not overwritten."
+        print("DJ Sync — APPLYING INCREMENTAL SYNC")
+        print("Spotify is the source of truth for DJ Sync-managed TIDAL playlists.")
+        summary = execute_incremental_sync(
+            client=tidal_client, database=database, plan=plan
         )
-        summary = execute_initial_sync(client=client, database=database, plan=plan)
         for item in summary.playlists:
-            action = "CREATED" if item.created else "RESUMED"
+            changes = []
+            if item.created:
+                changes.append("created")
+            if item.renamed:
+                changes.append("renamed")
+            if item.tracks_added:
+                changes.append(f"+{item.tracks_added}")
+            if item.tracks_removed:
+                changes.append(f"-{item.tracks_removed}")
+            if not changes:
+                changes.append("unchanged")
             suffix = (
-                f", {item.already_present} already present"
-                if item.already_present
+                f"; {item.unmatched_skipped} unmatched skipped"
+                if item.unmatched_skipped
                 else ""
             )
-            print(
-                f"  ✓ {action:<7} {item.name}: +{item.tracks_added} tracks"
-                f"{suffix}; {item.unmatched_skipped} unmatched skipped"
-            )
+            print(f"  ✓ {item.name}: {', '.join(changes)}{suffix}")
 
-        print("\nTIDAL sync complete.")
-        print(f"Playlists created:  {summary.playlists_created}")
-        print(f"Tracks added:       {summary.tracks_added}")
-        print(f"Unmatched skipped:  {summary.unmatched_skipped}")
+        print("\nIncremental TIDAL sync complete.")
+        print(f"Playlists created: {summary.playlists_created}")
+        print(f"Playlists renamed: {summary.playlists_renamed}")
+        print(f"Tracks added:      {summary.tracks_added}")
+        print(f"Tracks removed:    {summary.tracks_removed}")
         return 0
 
     build_parser().print_help()
