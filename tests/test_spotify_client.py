@@ -71,3 +71,62 @@ def test_iter_playlist_items_uses_current_50_item_page_limit() -> None:
     assert list(client.iter_playlist_items("playlist-1")) == []
 
     assert session.calls[0][1]["params"]["limit"] == 50
+
+
+class StatusResponse(FakeResponse):
+    def __init__(self, payload, status_code):
+        super().__init__(payload)
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            import requests
+
+            raise requests.HTTPError(f"HTTP {self.status_code}")
+
+
+class StatusSession:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return self.responses.pop(0)
+
+
+def test_client_refreshes_once_on_401_and_retries_request() -> None:
+    session = StatusSession(
+        [
+            StatusResponse({}, 401),
+            StatusResponse({"items": [], "next": None}, 200),
+        ]
+    )
+    refresh_calls = []
+
+    def refresh():
+        refresh_calls.append(True)
+        return "fresh-token"
+
+    client = SpotifyClient("expired-token", token_refresher=refresh, session=session)
+
+    assert list(client.iter_playlist_items("playlist-1")) == []
+    assert len(refresh_calls) == 1
+    assert len(session.calls) == 2
+    assert session.calls[0][1]["headers"]["Authorization"] == "Bearer expired-token"
+    assert session.calls[1][1]["headers"]["Authorization"] == "Bearer fresh-token"
+
+
+def test_client_does_not_loop_if_refreshed_token_is_also_unauthorized() -> None:
+    import pytest
+    import requests
+
+    session = StatusSession([StatusResponse({}, 401), StatusResponse({}, 401)])
+    client = SpotifyClient(
+        "expired-token", token_refresher=lambda: "still-bad", session=session
+    )
+
+    with pytest.raises(requests.HTTPError):
+        list(client.iter_playlist_items("playlist-1"))
+
+    assert len(session.calls) == 2

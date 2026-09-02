@@ -5,7 +5,11 @@ import argparse
 from dj_sync.config import Settings
 from dj_sync.database.database import Database
 from dj_sync.playlist_selection import parse_selection
-from dj_sync.spotify.auth import SpotifyTokenStore, login_with_pkce
+from dj_sync.spotify.auth import (
+    SpotifyTokenStore,
+    login_with_pkce,
+    refresh_access_token as refresh_spotify_access_token,
+)
 from dj_sync.spotify.client import SpotifyClient, SpotifyPlaylist
 from dj_sync.spotify.ingest import ingest_managed_playlists
 from dj_sync.tidal.auth import TidalTokenStore, login_with_pkce as tidal_login_with_pkce
@@ -89,12 +93,32 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _spotify_token(settings: Settings):
+def _spotify_client(settings: Settings) -> SpotifyClient:
+    if not settings.spotify_client_id:
+        raise RuntimeError(
+            "SPOTIFY_CLIENT_ID is missing. Copy .env.example to .env and add it."
+        )
+
     token_store = SpotifyTokenStore(settings.spotify_token_path)
     token = token_store.load()
     if token is None:
         raise RuntimeError("Spotify is not connected. Run: dj-sync spotify-login")
-    return token
+
+    def refresh() -> str:
+        current = token_store.load()
+        if current is None or not current.refresh_token:
+            raise RuntimeError(
+                "Spotify session expired and no refresh token is available. "
+                "Run: dj-sync spotify-login"
+            )
+        refreshed = refresh_spotify_access_token(
+            client_id=settings.spotify_client_id,
+            refresh_token=current.refresh_token,
+        )
+        token_store.save(refreshed)
+        return refreshed.access_token
+
+    return SpotifyClient(token.access_token, token_refresher=refresh)
 
 
 def _tidal_token(settings: Settings):
@@ -106,8 +130,7 @@ def _tidal_token(settings: Settings):
 
 
 def _spotify_playlists(settings: Settings) -> list[SpotifyPlaylist]:
-    token = _spotify_token(settings)
-    return list(SpotifyClient(token.access_token).iter_playlists())
+    return list(_spotify_client(settings).iter_playlists())
 
 
 def _print_spotify_playlists(playlists: list[SpotifyPlaylist]) -> None:
@@ -290,8 +313,7 @@ def main() -> int:
 
     if args.command == "spotify-ingest":
         database.initialize()
-        token = _spotify_token(settings)
-        client = SpotifyClient(token.access_token)
+        client = _spotify_client(settings)
         managed = database.list_managed_playlists()
         if not managed:
             print("No managed playlists saved yet. Run: dj-sync spotify-select")
@@ -326,8 +348,7 @@ def main() -> int:
 
         # A sync command always refreshes Spotify first. The local SQLite snapshot
         # is a cache/state store; Spotify remains the source of truth.
-        spotify_token = _spotify_token(settings)
-        spotify_client = SpotifyClient(spotify_token.access_token)
+        spotify_client = _spotify_client(settings)
         ingest_summary = ingest_managed_playlists(client=spotify_client, database=database)
 
         tidal_token = _tidal_token(settings)

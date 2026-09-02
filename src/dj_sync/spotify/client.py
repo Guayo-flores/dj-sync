@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 import requests
 
@@ -24,20 +24,37 @@ class SpotifyClient:
         self,
         access_token: str,
         *,
+        token_refresher: Callable[[], str] | None = None,
         session: requests.Session | None = None,
         timeout: float = 20.0,
     ) -> None:
         self.access_token = access_token
+        self.token_refresher = token_refresher
         self.session = session or requests.Session()
         self.timeout = timeout
 
-    def _get(self, path: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        response = self.session.get(
+    def _request_get(
+        self, path: str, *, params: dict[str, Any] | None = None
+    ) -> requests.Response:
+        return self.session.get(
             f"{SPOTIFY_API_BASE}{path}",
             headers={"Authorization": f"Bearer {self.access_token}"},
             params=params,
             timeout=self.timeout,
         )
+
+    def _get(self, path: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        response = self._request_get(path, params=params)
+
+        # Spotify access tokens are short-lived. For long-running/personal sync
+        # usage, refresh transparently on the first 401 and retry exactly once.
+        if (
+            getattr(response, "status_code", 200) == 401
+            and self.token_refresher is not None
+        ):
+            self.access_token = self.token_refresher()
+            response = self._request_get(path, params=params)
+
         response.raise_for_status()
         return response.json()
 
