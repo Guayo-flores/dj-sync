@@ -10,6 +10,7 @@ from dj_sync.spotify.client import SpotifyClient, SpotifyPlaylist
 from dj_sync.spotify.ingest import ingest_managed_playlists
 from dj_sync.tidal.auth import TidalTokenStore, login_with_pkce as tidal_login_with_pkce
 from dj_sync.tidal.client import TidalClient
+from dj_sync.tidal.matcher import match_unmatched_tracks_by_isrc
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -32,6 +33,16 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "tidal-write-test",
         help="Create, verify, and delete a temporary TIDAL playlist.",
+    )
+    isrc_parser = subparsers.add_parser(
+        "tidal-match-isrc",
+        help="Match unmatched Spotify tracks to TIDAL by exact ISRC.",
+    )
+    isrc_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Only process this many unmatched Spotify tracks.",
     )
 
     sync_parser = subparsers.add_parser("sync", help="Synchronize managed playlists.")
@@ -134,6 +145,22 @@ def main() -> int:
                 print("  ✓ Temporary playlist deleted")
 
         print("TIDAL playlist write test passed.")
+        return 0
+
+    if args.command == "tidal-match-isrc":
+        database.initialize()
+        token = _tidal_token(settings)
+        client = TidalClient(token.access_token)
+        summary = match_unmatched_tracks_by_isrc(
+            client=client, database=database, limit=args.limit
+        )
+        counts = database.track_match_counts()
+        print("DJ Sync — TIDAL exact ISRC matching")
+        print(f"Candidates processed: {summary.candidates}")
+        print(f"Exact matches:        {summary.matched}")
+        print(f"ISRC misses:          {summary.misses}")
+        print(f"API batches:          {summary.batches}")
+        print(f"Mapped tracks total:  {counts['matched']} / {counts['total']}")
         return 0
 
     if args.command == "spotify-playlists":

@@ -109,3 +109,44 @@ def test_delete_playlist_uses_idempotency_key() -> None:
     assert url.endswith("/playlists/playlist-789")
     assert kwargs["headers"]["Idempotency-Key"]
     assert response.raise_for_status_called
+
+
+def test_get_tracks_by_isrc_uses_batched_filter_and_parses_tracks() -> None:
+    session = FakeSession()
+    response = session.queue(
+        {
+            "data": [
+                {
+                    "id": "75413016",
+                    "type": "tracks",
+                    "attributes": {
+                        "title": "Example Song",
+                        "isrc": "USABC1234567",
+                        "duration": "PT3M12S",
+                    },
+                }
+            ]
+        }
+    )
+    client = TidalClient("access-123", session=session)
+
+    tracks = client.get_tracks_by_isrc(["USABC1234567", "USXYZ7654321"])
+
+    method, url, kwargs = session.calls[0]
+    assert method == "GET"
+    assert url.endswith("/tracks")
+    assert kwargs["params"]["filter[isrc]"] == ["USABC1234567", "USXYZ7654321"]
+    assert tracks[0].id == "75413016"
+    assert tracks[0].isrc == "USABC1234567"
+    assert response.raise_for_status_called
+
+
+def test_get_tracks_by_isrc_rejects_more_than_twenty() -> None:
+    client = TidalClient("access-123", session=FakeSession())
+
+    try:
+        client.get_tracks_by_isrc([f"ISRC{i:02d}" for i in range(21)])
+    except ValueError as error:
+        assert "at most 20" in str(error)
+    else:
+        raise AssertionError("Expected ValueError")

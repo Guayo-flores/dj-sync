@@ -81,3 +81,47 @@ def test_database_migrates_existing_track_columns_and_playlist_membership_key(tm
 
     assert {"album", "spotify_uri"}.issubset(track_columns)
     assert primary_key == ["playlist_id", "position"]
+
+
+def test_database_saves_and_counts_track_matches(tmp_path) -> None:
+    database = Database(tmp_path / "dj_sync.db")
+    database.initialize()
+    with database.connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO tracks (spotify_track_id, isrc, title, artist, duration_ms)
+            VALUES ('spotify-1', 'USABC1234567', 'Song', 'Artist', 180000)
+            """
+        )
+
+    pending = database.list_tracks_pending_isrc_match()
+    assert [row["spotify_track_id"] for row in pending] == ["spotify-1"]
+
+    database.save_track_match(
+        spotify_track_id="spotify-1",
+        tidal_track_id="tidal-1",
+        method="isrc",
+        score=1.0,
+    )
+
+    counts = database.track_match_counts()
+    assert counts["total"] == 1
+    assert counts["matched"] == 1
+    assert database.list_tracks_pending_isrc_match() == []
+
+
+def test_database_marks_isrc_miss_so_exact_pass_is_not_repeated(tmp_path) -> None:
+    database = Database(tmp_path / "dj_sync.db")
+    database.initialize()
+    with database.connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO tracks (spotify_track_id, isrc, title, artist, duration_ms)
+            VALUES ('spotify-1', 'USABC1234567', 'Song', 'Artist', 180000)
+            """
+        )
+
+    database.mark_isrc_miss("spotify-1")
+
+    assert database.list_tracks_pending_isrc_match() == []
+    assert database.track_match_counts()["isrc_misses"] == 1

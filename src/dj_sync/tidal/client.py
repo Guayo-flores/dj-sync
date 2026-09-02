@@ -28,6 +28,24 @@ class TidalPlaylist:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class TidalTrack:
+    id: str
+    title: str
+    isrc: str | None
+    duration: str | None = None
+
+    @classmethod
+    def from_resource(cls, resource: dict[str, Any]) -> "TidalTrack":
+        attributes = resource.get("attributes") or {}
+        return cls(
+            id=str(resource["id"]),
+            title=str(attributes.get("title") or ""),
+            isrc=attributes.get("isrc"),
+            duration=attributes.get("duration"),
+        )
+
+
 class TidalClient:
     def __init__(
         self,
@@ -96,3 +114,19 @@ class TidalClient:
             timeout=self.timeout,
         )
         response.raise_for_status()
+
+    def get_tracks_by_isrc(self, isrcs: list[str]) -> list[TidalTrack]:
+        if not isrcs:
+            return []
+        if len(isrcs) > 20:
+            raise ValueError("TIDAL accepts at most 20 ISRCs per tracks request")
+
+        response = self.session.get(
+            f"{self.base_url}/tracks",
+            headers=self._headers(),
+            params={"filter[isrc]": isrcs},
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        data = response.json().get("data") or []
+        return [TidalTrack.from_resource(resource) for resource in data]

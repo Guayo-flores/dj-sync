@@ -1,0 +1,56 @@
+from __future__ import annotations
+
+from dj_sync.database.database import Database
+from dj_sync.tidal.client import TidalTrack
+from dj_sync.tidal.matcher import match_unmatched_tracks_by_isrc
+
+
+class FakeTidalClient:
+    def __init__(self, matches: dict[str, str]) -> None:
+        self.matches = matches
+        self.calls: list[list[str]] = []
+
+    def get_tracks_by_isrc(self, isrcs: list[str]) -> list[TidalTrack]:
+        self.calls.append(isrcs)
+        return [
+            TidalTrack(id=self.matches[isrc], title="Song", isrc=isrc)
+            for isrc in isrcs
+            if isrc in self.matches
+        ]
+
+
+def seed_tracks(database: Database, count: int) -> None:
+    with database.connect() as connection:
+        connection.executemany(
+            """
+            INSERT INTO tracks (spotify_track_id, isrc, title, artist, duration_ms)
+            VALUES (?, ?, ?, 'Artist', 180000)
+            """,
+            [
+                (f"spotify-{index}", f"USABC{index:07d}", f"Song {index}")
+                for index in range(count)
+            ],
+        )
+
+
+def test_isrc_matcher_batches_twenty_and_persists_matches_and_misses(tmp_path) -> None:
+    database = Database(tmp_path / "dj_sync.db")
+    database.initialize()
+    seed_tracks(database, 21)
+    client = FakeTidalClient(
+        {
+            "USABC0000000": "tidal-0",
+            "USABC0000020": "tidal-20",
+        }
+    )
+
+    summary = match_unmatched_tracks_by_isrc(client=client, database=database)
+
+    assert summary.candidates == 21
+    assert summary.batches == 2
+    assert summary.matched == 2
+    assert summary.misses == 19
+    assert [len(call) for call in client.calls] == [20, 1]
+    counts = database.track_match_counts()
+    assert counts["matched"] == 2
+    assert counts["isrc_misses"] == 19

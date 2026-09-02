@@ -34,7 +34,7 @@ The SQLite database separates:
 - `playlist_tracks`: membership of tracks in each managed playlist.
 - `sync_runs`: sync history and result counts.
 
-## Current milestone: 0.5 - Spotify track ingestion
+## Current milestone: 0.6 - TIDAL exact ISRC matching
 
 Implemented:
 
@@ -55,11 +55,15 @@ Implemented:
 - Normalized track metadata: Spotify ID/URI, ISRC, title, artists, album, duration, added date, and playlist position.
 - Global track deduplication across playlists while preserving duplicate entries within a playlist.
 - SQLite migration support for the new track metadata and position-based membership model.
+- Exact TIDAL track lookup by ISRC using batches of up to 20 identifiers per API request.
+- Persistent exact-match mappings so repeated playlist appearances never need to be matched again.
+- ISRC miss tracking so the exact-match pass is idempotent and fallback matching can handle the remainder.
+- `tidal-match-isrc` command with an optional `--limit` for safe staged testing.
 
 Next:
 
-1. Add TIDAL search and ISRC-first track matching.
-2. Add metadata fallback matching with confidence scoring.
+1. Add metadata fallback matching with confidence scoring.
+2. Add a manual review queue for ambiguous matches.
 3. Create and populate managed TIDAL playlist mirrors.
 4. Implement delta sync for additions, removals, renames, and playlist lifecycle.
 
@@ -109,6 +113,18 @@ Fetch and persist normalized tracks from all managed Spotify playlists:
 
 ```bash
 dj-sync spotify-ingest
+```
+
+Match ingested Spotify tracks to TIDAL by exact ISRC. Use a small limit first when validating a real account:
+
+```bash
+dj-sync tidal-match-isrc --limit 40
+```
+
+Then process the remaining exact ISRC matches:
+
+```bash
+dj-sync tidal-match-isrc
 ```
 
 Preview mode:

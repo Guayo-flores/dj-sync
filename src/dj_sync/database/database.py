@@ -211,6 +211,75 @@ class Database:
                 ],
             )
 
+
+    def list_tracks_pending_isrc_match(self, limit: int | None = None) -> list[sqlite3.Row]:
+        query = """
+            SELECT spotify_track_id, isrc, title, artist, duration_ms
+            FROM tracks
+            WHERE tidal_track_id IS NULL
+              AND isrc IS NOT NULL
+              AND TRIM(isrc) != ''
+              AND (match_method IS NULL OR match_method != 'isrc_not_found')
+            ORDER BY spotify_track_id
+        """
+        params: tuple[object, ...] = ()
+        if limit is not None:
+            query += " LIMIT ?"
+            params = (limit,)
+        with self.connect() as connection:
+            return connection.execute(query, params).fetchall()
+
+    def save_track_match(
+        self,
+        *,
+        spotify_track_id: str,
+        tidal_track_id: str,
+        method: str,
+        score: float,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE tracks
+                SET tidal_track_id = ?,
+                    match_method = ?,
+                    match_score = ?,
+                    first_matched_at = COALESCE(first_matched_at, CURRENT_TIMESTAMP)
+                WHERE spotify_track_id = ?
+                """,
+                (tidal_track_id, method, score, spotify_track_id),
+            )
+
+    def mark_isrc_miss(self, spotify_track_id: str) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE tracks
+                SET match_method = 'isrc_not_found', match_score = 0
+                WHERE spotify_track_id = ? AND tidal_track_id IS NULL
+                """,
+                (spotify_track_id,),
+            )
+
+    def track_match_counts(self) -> dict[str, int]:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN tidal_track_id IS NOT NULL THEN 1 ELSE 0 END) AS matched,
+                    SUM(CASE WHEN tidal_track_id IS NULL AND isrc IS NULL THEN 1 ELSE 0 END) AS no_isrc,
+                    SUM(CASE WHEN match_method = 'isrc_not_found' THEN 1 ELSE 0 END) AS isrc_misses
+                FROM tracks
+                """
+            ).fetchone()
+        return {
+            "total": int(row["total"] or 0),
+            "matched": int(row["matched"] or 0),
+            "no_isrc": int(row["no_isrc"] or 0),
+            "isrc_misses": int(row["isrc_misses"] or 0),
+        }
+
     def count_tracks(self) -> int:
         with self.connect() as connection:
             row = connection.execute("SELECT COUNT(*) AS count FROM tracks").fetchone()
