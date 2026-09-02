@@ -34,7 +34,7 @@ The SQLite database separates:
 - `playlist_tracks`: membership of tracks in each managed playlist.
 - `sync_runs`: sync history and result counts.
 
-## Current milestone: 0.1 - Foundation
+## Current milestone: 0.2 - Spotify connection
 
 Implemented:
 
@@ -44,15 +44,16 @@ Implemented:
 - `--dry-run` CLI flag.
 - Automated tests for the database schema and diff behavior.
 - Secret-safe `.env.example` and `.gitignore`.
+- Spotify OAuth 2.0 PKCE foundation and local callback flow.
+- Current Spotify playlist listing with pagination and 2026 API fields.
 
 Next:
 
-1. Spotify OAuth with PKCE.
-2. Fetch current user's playlists.
-3. Interactive selection of managed playlists.
-4. Persist selected Spotify playlists in SQLite.
-5. TIDAL OAuth and playlist creation.
-6. Track matching: ISRC first, metadata fallback.
+1. Interactive selection of managed Spotify playlists.
+2. Persist selected Spotify playlists in SQLite.
+3. Fetch playlist items and normalize track metadata.
+4. TIDAL OAuth and playlist creation.
+5. Track matching: ISRC first, metadata fallback.
 
 ## Local setup
 
@@ -69,13 +70,25 @@ pip install -e ".[dev]"
 Initialize the local database:
 
 ```bash
-dj-sync --init-db
+dj-sync init-db
+```
+
+Connect Spotify after creating a Spotify Developer app and setting `SPOTIFY_CLIENT_ID` in `.env`:
+
+```bash
+dj-sync spotify-login
+```
+
+List playlists visible to DJ Sync:
+
+```bash
+dj-sync spotify-playlists
 ```
 
 Preview mode:
 
 ```bash
-dj-sync --dry-run
+dj-sync sync --dry-run
 ```
 
 Run tests:
