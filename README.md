@@ -56,6 +56,7 @@ Implemented:
 - Global track deduplication across playlists while preserving duplicate entries within a playlist.
 - SQLite migration support for the new track metadata and position-based membership model.
 - Exact TIDAL track lookup by ISRC using batches of up to 20 identifiers per API request.
+- ISRC normalization (uppercase/compact format) and malformed-value isolation so one catalogue metadata quirk cannot fail an entire batch.
 - Persistent exact-match mappings so repeated playlist appearances never need to be matched again.
 - ISRC miss tracking so the exact-match pass is idempotent and fallback matching can handle the remainder.
 - `tidal-match-isrc` command with an optional `--limit` for safe staged testing.

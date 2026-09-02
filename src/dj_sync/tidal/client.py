@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+
+from dj_sync.matching.isrc import normalize_isrc
 from uuid import uuid4
 
 import requests
@@ -121,10 +123,18 @@ class TidalClient:
         if len(isrcs) > 20:
             raise ValueError("TIDAL accepts at most 20 ISRCs per tracks request")
 
+        normalized_isrcs = []
+        for isrc in isrcs:
+            normalized = normalize_isrc(isrc)
+            if normalized is None:
+                raise ValueError(f"Invalid ISRC: {isrc!r}")
+            if normalized not in normalized_isrcs:
+                normalized_isrcs.append(normalized)
+
         response = self.session.get(
             f"{self.base_url}/tracks",
             headers=self._headers(),
-            params={"filter[isrc]": isrcs},
+            params={"filter[isrc]": normalized_isrcs},
             timeout=self.timeout,
         )
         response.raise_for_status()

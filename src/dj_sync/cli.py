@@ -159,6 +159,7 @@ def main() -> int:
         print(f"Candidates processed: {summary.candidates}")
         print(f"Exact matches:        {summary.matched}")
         print(f"ISRC misses:          {summary.misses}")
+        print(f"Invalid ISRCs:        {summary.invalid}")
         print(f"API batches:          {summary.batches}")
         print(f"Mapped tracks total:  {counts['matched']} / {counts['total']}")
         return 0

@@ -54,3 +54,43 @@ def test_isrc_matcher_batches_twenty_and_persists_matches_and_misses(tmp_path) -
     counts = database.track_match_counts()
     assert counts["matched"] == 2
     assert counts["isrc_misses"] == 19
+
+
+def test_isrc_matcher_normalizes_lowercase_before_tidal_lookup(tmp_path) -> None:
+    database = Database(tmp_path / "dj_sync.db")
+    database.initialize()
+    with database.connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO tracks (spotify_track_id, isrc, title, artist, duration_ms)
+            VALUES ('spotify-lower', 'ushm92249275', 'Song', 'Artist', 180000)
+            """
+        )
+    client = FakeTidalClient({"USHM92249275": "tidal-lower"})
+
+    summary = match_unmatched_tracks_by_isrc(client=client, database=database)
+
+    assert client.calls == [["USHM92249275"]]
+    assert summary.matched == 1
+    assert summary.invalid == 0
+    assert database.track_match_counts()["matched"] == 1
+
+
+def test_isrc_matcher_marks_malformed_isrc_without_calling_tidal(tmp_path) -> None:
+    database = Database(tmp_path / "dj_sync.db")
+    database.initialize()
+    with database.connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO tracks (spotify_track_id, isrc, title, artist, duration_ms)
+            VALUES ('spotify-bad', 'BAD', 'Song', 'Artist', 180000)
+            """
+        )
+    client = FakeTidalClient({})
+
+    summary = match_unmatched_tracks_by_isrc(client=client, database=database)
+
+    assert client.calls == []
+    assert summary.invalid == 1
+    assert summary.batches == 0
+    assert database.list_tracks_pending_isrc_match() == []

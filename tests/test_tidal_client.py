@@ -150,3 +150,28 @@ def test_get_tracks_by_isrc_rejects_more_than_twenty() -> None:
         assert "at most 20" in str(error)
     else:
         raise AssertionError("Expected ValueError")
+
+
+def test_get_tracks_by_isrc_normalizes_lowercase_and_hyphenated_values() -> None:
+    session = FakeSession()
+    session.queue({"data": []})
+    client = TidalClient("access-123", session=session)
+
+    client.get_tracks_by_isrc(["ushm92249275", "US-ABC-12-34567"])
+
+    _, _, kwargs = session.calls[0]
+    assert kwargs["params"]["filter[isrc]"] == [
+        "USHM92249275",
+        "USABC1234567",
+    ]
+
+
+def test_get_tracks_by_isrc_rejects_malformed_isrc() -> None:
+    client = TidalClient("access-123", session=FakeSession())
+
+    try:
+        client.get_tracks_by_isrc(["not-an-isrc"])
+    except ValueError as error:
+        assert "Invalid ISRC" in str(error)
+    else:
+        raise AssertionError("Expected ValueError")

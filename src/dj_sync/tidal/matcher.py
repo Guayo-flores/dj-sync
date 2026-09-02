@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from itertools import islice
 
 from dj_sync.database.database import Database
+from dj_sync.matching.isrc import normalize_isrc
 from dj_sync.tidal.client import TidalClient
 
 
@@ -12,6 +13,7 @@ class IsrcMatchSummary:
     candidates: int
     matched: int
     misses: int
+    invalid: int
     batches: int
 
 
@@ -27,17 +29,35 @@ def match_unmatched_tracks_by_isrc(
     candidates = database.list_tracks_pending_isrc_match(limit=limit)
     matched = 0
     misses = 0
+    invalid = 0
     batches = 0
 
     for batch in _batched(candidates, 20):
-        batches += 1
-        isrcs = [row["isrc"] for row in batch if row["isrc"]]
-        tidal_tracks = client.get_tracks_by_isrc(isrcs)
-        by_isrc = {track.isrc.upper(): track for track in tidal_tracks if track.isrc}
-
+        normalized_rows: list[tuple[object, str]] = []
         for row in batch:
-            isrc = row["isrc"]
-            tidal_track = by_isrc.get(isrc.upper()) if isrc else None
+            normalized = normalize_isrc(row["isrc"])
+            if normalized is None:
+                database.mark_isrc_invalid(row["spotify_track_id"])
+                invalid += 1
+                continue
+            normalized_rows.append((row, normalized))
+
+        if not normalized_rows:
+            continue
+
+        # De-duplicate equivalent recordings within a batch while preserving
+        # order. A single TIDAL result can satisfy multiple Spotify track IDs.
+        isrcs = list(dict.fromkeys(isrc for _, isrc in normalized_rows))
+        batches += 1
+        tidal_tracks = client.get_tracks_by_isrc(isrcs)
+        by_isrc = {
+            normalized: track
+            for track in tidal_tracks
+            if (normalized := normalize_isrc(track.isrc)) is not None
+        }
+
+        for row, isrc in normalized_rows:
+            tidal_track = by_isrc.get(isrc)
             if tidal_track is None:
                 database.mark_isrc_miss(row["spotify_track_id"])
                 misses += 1
@@ -55,5 +75,6 @@ def match_unmatched_tracks_by_isrc(
         candidates=len(candidates),
         matched=matched,
         misses=misses,
+        invalid=invalid,
         batches=batches,
     )

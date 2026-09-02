@@ -219,7 +219,7 @@ class Database:
             WHERE tidal_track_id IS NULL
               AND isrc IS NOT NULL
               AND TRIM(isrc) != ''
-              AND (match_method IS NULL OR match_method != 'isrc_not_found')
+              AND (match_method IS NULL OR match_method NOT IN ('isrc_not_found', 'isrc_invalid'))
             ORDER BY spotify_track_id
         """
         params: tuple[object, ...] = ()
@@ -256,6 +256,17 @@ class Database:
                 """
                 UPDATE tracks
                 SET match_method = 'isrc_not_found', match_score = 0
+                WHERE spotify_track_id = ? AND tidal_track_id IS NULL
+                """,
+                (spotify_track_id,),
+            )
+
+    def mark_isrc_invalid(self, spotify_track_id: str) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE tracks
+                SET match_method = 'isrc_invalid', match_score = 0
                 WHERE spotify_track_id = ? AND tidal_track_id IS NULL
                 """,
                 (spotify_track_id,),
