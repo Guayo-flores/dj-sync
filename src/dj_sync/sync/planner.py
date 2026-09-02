@@ -21,6 +21,7 @@ class PlaylistSyncPlan:
     action: str
     playlist_entries: int
     mapped_entries: int
+    tidal_track_ids: tuple[str, ...]
     unmatched_entries: tuple[UnmatchedPlaylistTrack, ...]
 
     @property
@@ -79,6 +80,11 @@ def build_sync_plan(database: Database) -> SyncPlan:
                 action="update" if tidal_playlist_id else "create",
                 playlist_entries=len(entries),
                 mapped_entries=mapped_entries,
+                tidal_track_ids=tuple(
+                    str(row["tidal_track_id"])
+                    for row in entries
+                    if row["tidal_track_id"] is not None
+                ),
                 unmatched_entries=unmatched,
             )
         )

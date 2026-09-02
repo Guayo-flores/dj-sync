@@ -35,6 +35,28 @@ class TidalPlaylist:
 
 
 @dataclass(frozen=True, slots=True)
+class TidalPlaylistItem:
+    id: str
+    type: str
+    item_id: str | None = None
+
+    @classmethod
+    def from_resource(cls, resource: dict[str, Any]) -> "TidalPlaylistItem":
+        meta = resource.get("meta") or {}
+        return cls(
+            id=str(resource["id"]),
+            type=str(resource.get("type") or ""),
+            item_id=str(meta["itemId"]) if meta.get("itemId") else None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TidalPlaylistAddResult:
+    added: int
+    skipped_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class TidalTrack:
     id: str
     title: str
@@ -138,6 +160,36 @@ class TidalClient:
 
         raise RuntimeError("Unreachable TIDAL retry state")
 
+    def _mutation_with_rate_limit_retry(
+        self,
+        method: str,
+        url: str,
+        *,
+        json: dict[str, Any] | None = None,
+    ) -> requests.Response:
+        # Generate the idempotency key once and reuse it across retries. TIDAL
+        # replays a completed mutation when the same key + payload is retried.
+        headers = self._headers(mutation=True)
+        request = getattr(self.session, method.lower())
+        for attempt in range(self.max_rate_limit_retries + 1):
+            kwargs: dict[str, Any] = {
+                "headers": headers,
+                "timeout": self.timeout,
+            }
+            if json is not None:
+                kwargs["json"] = json
+            response = request(url, **kwargs)
+            if response.status_code != 429:
+                response.raise_for_status()
+                return response
+
+            if attempt >= self.max_rate_limit_retries:
+                response.raise_for_status()
+
+            self.sleep_fn(self._rate_limit_delay(response, attempt))
+
+        raise RuntimeError("Unreachable TIDAL retry state")
+
     def create_playlist(
         self,
         name: str,
@@ -152,18 +204,16 @@ class TidalClient:
         if description is not None:
             attributes["description"] = description
 
-        response = self.session.post(
+        response = self._mutation_with_rate_limit_retry(
+            "post",
             f"{self.base_url}/playlists",
-            headers=self._headers(mutation=True),
             json={
                 "data": {
                     "type": "playlists",
                     "attributes": attributes,
                 }
             },
-            timeout=self.timeout,
         )
-        response.raise_for_status()
         return TidalPlaylist.from_resource(response.json()["data"])
 
     def get_playlist(self, playlist_id: str) -> TidalPlaylist:
@@ -176,12 +226,69 @@ class TidalClient:
         return TidalPlaylist.from_resource(response.json()["data"])
 
     def delete_playlist(self, playlist_id: str) -> None:
-        response = self.session.delete(
-            f"{self.base_url}/playlists/{playlist_id}",
-            headers=self._headers(mutation=True),
-            timeout=self.timeout,
+        self._mutation_with_rate_limit_retry(
+            "delete", f"{self.base_url}/playlists/{playlist_id}"
         )
-        response.raise_for_status()
+
+    @staticmethod
+    def _next_link(payload: dict[str, Any]) -> str | None:
+        next_link = (payload.get("links") or {}).get("next")
+        if isinstance(next_link, str):
+            return next_link
+        if isinstance(next_link, dict) and next_link.get("href"):
+            return str(next_link["href"])
+        return None
+
+    def iter_owned_playlists(self):
+        url: str | None = f"{self.base_url}/playlists"
+        params: dict[str, Any] | None = {"filter[owners.id]": ["me"]}
+        while url:
+            response = self._get_with_rate_limit_retry(url, params=params)
+            payload = response.json()
+            for resource in payload.get("data") or []:
+                yield TidalPlaylist.from_resource(resource)
+            url = self._next_link(payload)
+            # The next link already contains TIDAL's opaque cursor and filters.
+            params = None
+
+    def iter_playlist_items(self, playlist_id: str):
+        url: str | None = f"{self.base_url}/playlists/{playlist_id}/relationships/items"
+        while url:
+            response = self._get_with_rate_limit_retry(url)
+            payload = response.json()
+            for resource in payload.get("data") or []:
+                yield TidalPlaylistItem.from_resource(resource)
+            url = self._next_link(payload)
+
+    def add_playlist_tracks(
+        self, playlist_id: str, track_ids: list[str]
+    ) -> TidalPlaylistAddResult:
+        if not track_ids:
+            return TidalPlaylistAddResult(added=0)
+        if len(track_ids) > 50:
+            raise ValueError("TIDAL accepts at most 50 playlist items per add request")
+
+        response = self._mutation_with_rate_limit_retry(
+            "post",
+            f"{self.base_url}/playlists/{playlist_id}/relationships/items",
+            json={
+                "data": [
+                    {"type": "tracks", "id": str(track_id)}
+                    for track_id in track_ids
+                ]
+            },
+        )
+        payload = response.json()
+        skipped = tuple(
+            str(item["id"])
+            for item in (payload.get("meta") or {}).get("skipped") or []
+        )
+        added = len(payload.get("data") or [])
+        # Some compatible responses may omit relationship data but still report
+        # skipped identifiers. Derive the successful count in that case.
+        if added == 0 and track_ids and "data" not in payload:
+            added = len(track_ids) - len(skipped)
+        return TidalPlaylistAddResult(added=added, skipped_ids=skipped)
 
     def get_tracks_by_isrc(self, isrcs: list[str]) -> list[TidalTrack]:
         if not isrcs:

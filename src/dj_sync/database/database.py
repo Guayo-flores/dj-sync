@@ -173,6 +173,40 @@ class Database:
                 (playlist_id,),
             ).fetchall()
 
+    def save_tidal_playlist_mapping(
+        self,
+        spotify_playlist_id: str,
+        tidal_playlist_id: str,
+        tidal_name: str,
+    ) -> None:
+        """Persist a Spotify -> TIDAL playlist link immediately after creation."""
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE playlists
+                SET tidal_playlist_id = ?, tidal_name = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE spotify_playlist_id = ?
+                  AND status = 'managed'
+                  AND managed_by_dj_sync = 1
+                """,
+                (tidal_playlist_id, tidal_name, spotify_playlist_id),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"Unknown managed Spotify playlist: {spotify_playlist_id}")
+
+    def mark_playlist_synced(self, spotify_playlist_id: str) -> None:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE playlists
+                SET last_synced_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                WHERE spotify_playlist_id = ?
+                """,
+                (spotify_playlist_id,),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"Unknown Spotify playlist: {spotify_playlist_id}")
+
     def replace_spotify_playlist_snapshot(
         self,
         spotify_playlist_id: str,

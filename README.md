@@ -35,7 +35,7 @@ The SQLite database separates:
 - `match_candidates`: ambiguous metadata matches held for manual review.
 - `sync_runs`: sync history and result counts.
 
-## Current milestone: 1.0 - Safe TIDAL sync planning
+## Current milestone: 1.1 - Resumable initial TIDAL sync
 
 Implemented:
 
@@ -72,13 +72,19 @@ Implemented:
 - Read-only sync planner that preserves Spotify playlist order and duplicate entries.
 - `sync --dry-run` preview showing which TIDAL playlists will be created or updated.
 - Per-playlist reporting of unresolved tracks that will be skipped rather than silently substituted.
-- Write execution remains intentionally locked until the dry-run plan is reviewed.
+- Explicit `sync --apply` execution after a verified dry run.
+- Automatic creation of missing managed TIDAL playlists.
+- Preflight detection of same-name existing TIDAL playlists so DJ Sync stops instead of creating accidental duplicates.
+- Immediate Spotify playlist -> TIDAL playlist mapping persistence after creation.
+- Playlist population in API-safe batches of up to 50 tracks while preserving order and duplicates.
+- Resumable initial sync: interrupted playlists only append a missing tail when the existing TIDAL sequence is an exact prefix.
+- Safety stop instead of overwriting a TIDAL playlist that has diverged from the expected state.
 
 Next:
 
-1. Create and populate managed TIDAL playlist mirrors from the verified plan.
-2. Persist Spotify playlist -> TIDAL playlist IDs immediately after creation for resumability.
-3. Implement delta sync for additions, removals, renames, and playlist lifecycle.
+1. Implement full delta reconciliation for additions, removals, and reorder changes.
+2. Mirror Spotify playlist renames.
+3. Add safe pause/delete lifecycle handling for managed playlists.
 
 ## Local setup
 
@@ -159,10 +165,16 @@ Manually search and resolve any recordings that still do not have a TIDAL mappin
 dj-sync resolve-unmatched
 ```
 
-Preview mode:
+Preview the initial sync:
 
 ```bash
 dj-sync sync --dry-run
+```
+
+Apply the reviewed plan:
+
+```bash
+dj-sync sync --apply
 ```
 
 Run tests:

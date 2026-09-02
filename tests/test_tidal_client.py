@@ -271,3 +271,78 @@ def test_search_tracks_parses_ranked_tracks_and_artists() -> None:
     assert [track.id for track in tracks] == ["track-2", "track-1"]
     assert tracks[0].artists == ("Artist Two",)
     assert tracks[0].duration_ms == 181000
+
+
+def test_add_playlist_tracks_preserves_order_and_uses_relationship_endpoint() -> None:
+    session = FakeSession()
+    session.queue(
+        {
+            "data": [
+                {"type": "tracks", "id": "track-1", "meta": {"itemId": "item-1"}},
+                {"type": "tracks", "id": "track-2", "meta": {"itemId": "item-2"}},
+            ],
+            "meta": {"skipped": []},
+        }
+    )
+    client = TidalClient("access-123", session=session)
+
+    result = client.add_playlist_tracks("playlist-1", ["track-1", "track-2"])
+
+    method, url, kwargs = session.calls[0]
+    assert method == "POST"
+    assert url.endswith("/playlists/playlist-1/relationships/items")
+    assert kwargs["json"] == {
+        "data": [
+            {"type": "tracks", "id": "track-1"},
+            {"type": "tracks", "id": "track-2"},
+        ]
+    }
+    assert kwargs["headers"]["Idempotency-Key"]
+    assert result.added == 2
+    assert result.skipped_ids == ()
+
+
+def test_add_playlist_tracks_rejects_more_than_fifty() -> None:
+    client = TidalClient("access-123", session=FakeSession())
+
+    try:
+        client.add_playlist_tracks("playlist-1", [str(i) for i in range(51)])
+    except ValueError as error:
+        assert "at most 50" in str(error)
+    else:
+        raise AssertionError("Expected ValueError")
+
+
+def test_iter_playlist_items_follows_json_api_next_link() -> None:
+    session = FakeSession()
+    session.queue(
+        {
+            "data": [{"type": "tracks", "id": "track-1", "meta": {"itemId": "item-1"}}],
+            "links": {"next": "https://example.test/next-page"},
+        }
+    )
+    session.queue(
+        {
+            "data": [{"type": "tracks", "id": "track-2", "meta": {"itemId": "item-2"}}],
+            "links": {"self": "https://example.test/next-page"},
+        }
+    )
+    client = TidalClient("access-123", session=session)
+
+    items = list(client.iter_playlist_items("playlist-1"))
+
+    assert [item.id for item in items] == ["track-1", "track-2"]
+    assert session.calls[1][1] == "https://example.test/next-page"
+
+
+def test_iter_owned_playlists_filters_for_authenticated_owner() -> None:
+    session = FakeSession()
+    session.queue({"data": [playlist_payload("owned-1")["data"]], "links": {}})
+    client = TidalClient("access-123", session=session)
+
+    playlists = list(client.iter_owned_playlists())
+
+    _, url, kwargs = session.calls[0]
+    assert url.endswith("/playlists")
+    assert kwargs["params"] == {"filter[owners.id]": ["me"]}
+    assert playlists[0].id == "owned-1"
