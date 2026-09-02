@@ -229,6 +229,79 @@ class Database:
         with self.connect() as connection:
             return connection.execute(query, params).fetchall()
 
+    def list_tracks_pending_metadata_match(self, limit: int | None = None) -> list[sqlite3.Row]:
+        query = """
+            SELECT spotify_track_id, isrc, title, artist, duration_ms
+            FROM tracks
+            WHERE tidal_track_id IS NULL
+              AND spotify_track_id NOT IN (
+                  SELECT spotify_track_id FROM match_candidates
+              )
+            ORDER BY spotify_track_id
+        """
+        params: tuple[object, ...] = ()
+        if limit is not None:
+            query += " LIMIT ?"
+            params = (limit,)
+        with self.connect() as connection:
+            return connection.execute(query, params).fetchall()
+
+    def save_match_candidate(
+        self,
+        *,
+        spotify_track_id: str,
+        tidal_track_id: str | None,
+        tidal_title: str | None,
+        tidal_artist: str | None,
+        tidal_duration_ms: int | None,
+        score: float,
+        title_score: float | None,
+        artist_score: float | None,
+        duration_score: float | None,
+        status: str,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO match_candidates (
+                    spotify_track_id, tidal_track_id, tidal_title, tidal_artist,
+                    tidal_duration_ms, score, title_score, artist_score,
+                    duration_score, status, searched_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(spotify_track_id) DO UPDATE SET
+                    tidal_track_id = excluded.tidal_track_id,
+                    tidal_title = excluded.tidal_title,
+                    tidal_artist = excluded.tidal_artist,
+                    tidal_duration_ms = excluded.tidal_duration_ms,
+                    score = excluded.score,
+                    title_score = excluded.title_score,
+                    artist_score = excluded.artist_score,
+                    duration_score = excluded.duration_score,
+                    status = excluded.status,
+                    searched_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    spotify_track_id, tidal_track_id, tidal_title, tidal_artist,
+                    tidal_duration_ms, score, title_score, artist_score,
+                    duration_score, status,
+                ),
+            )
+
+    def list_match_candidates(self, *, status: str = "review") -> list[sqlite3.Row]:
+        with self.connect() as connection:
+            return connection.execute(
+                """
+                SELECT mc.*, t.title AS spotify_title, t.artist AS spotify_artist,
+                       t.duration_ms AS spotify_duration_ms
+                FROM match_candidates mc
+                JOIN tracks t ON t.spotify_track_id = mc.spotify_track_id
+                WHERE mc.status = ?
+                ORDER BY mc.score DESC, t.artist COLLATE NOCASE, t.title COLLATE NOCASE
+                """,
+                (status,),
+            ).fetchall()
+
     def save_track_match(
         self,
         *,
@@ -248,6 +321,10 @@ class Database:
                 WHERE spotify_track_id = ?
                 """,
                 (tidal_track_id, method, score, spotify_track_id),
+            )
+            connection.execute(
+                "DELETE FROM match_candidates WHERE spotify_track_id = ?",
+                (spotify_track_id,),
             )
 
     def mark_isrc_miss(self, spotify_track_id: str) -> None:

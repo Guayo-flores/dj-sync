@@ -222,3 +222,52 @@ def test_get_tracks_by_isrc_uses_exponential_backoff_without_retry_after() -> No
     client.get_tracks_by_isrc(["USABC1234567"])
 
     assert sleeps == [2.0, 4.0]
+
+
+def test_search_tracks_parses_ranked_tracks_and_artists() -> None:
+    session = FakeSession()
+    session.queue(
+        {
+            "data": [
+                {
+                    "id": "search-1",
+                    "type": "searchResults",
+                    "relationships": {
+                        "tracks": {
+                            "data": [
+                                {"type": "tracks", "id": "track-2"},
+                                {"type": "tracks", "id": "track-1"},
+                            ]
+                        }
+                    },
+                }
+            ],
+            "included": [
+                {
+                    "id": "track-1",
+                    "type": "tracks",
+                    "attributes": {"title": "Song One", "isrc": None, "duration": "PT3M0S"},
+                    "relationships": {"artists": {"data": [{"type": "artists", "id": "artist-1"}]}},
+                },
+                {
+                    "id": "track-2",
+                    "type": "tracks",
+                    "attributes": {"title": "Song Two", "isrc": None, "duration": "PT3M1S"},
+                    "relationships": {"artists": {"data": [{"type": "artists", "id": "artist-2"}]}},
+                },
+                {"id": "artist-1", "type": "artists", "attributes": {"name": "Artist One"}},
+                {"id": "artist-2", "type": "artists", "attributes": {"name": "Artist Two"}},
+            ],
+        }
+    )
+    client = TidalClient("access-123", session=session)
+
+    tracks = client.search_tracks("Song Artist", limit=2)
+
+    _, url, kwargs = session.calls[0]
+    assert url.endswith("/searchResults")
+    assert kwargs["params"]["filter[query]"] == "Song Artist"
+    assert kwargs["params"]["include"] == ["tracks", "tracks.artists"]
+    assert [track.id for track in tracks] == ["track-2", "track-1"]
+    assert tracks[0].artists == ("Artist Two",)
+    assert tracks[0].duration_ms == 181000

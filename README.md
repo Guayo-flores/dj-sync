@@ -32,9 +32,10 @@ The SQLite database separates:
 - `playlists`: Spotify <-> TIDAL playlist mappings and management state.
 - `tracks`: global Spotify <-> TIDAL track mappings.
 - `playlist_tracks`: membership of tracks in each managed playlist.
+- `match_candidates`: ambiguous metadata matches held for manual review.
 - `sync_runs`: sync history and result counts.
 
-## Current milestone: 0.6 - TIDAL exact ISRC matching
+## Current milestone: 0.7 - Metadata fallback matching
 
 Implemented:
 
@@ -60,13 +61,18 @@ Implemented:
 - Persistent exact-match mappings so repeated playlist appearances never need to be matched again.
 - ISRC miss tracking so the exact-match pass is idempotent and fallback matching can handle the remainder.
 - `tidal-match-isrc` command with an optional `--limit` for safe staged testing.
+- TIDAL search fallback for recordings whose Spotify ISRC is not available on TIDAL.
+- Conservative metadata scoring across title, lead artist, and recording duration.
+- Automatic linking only for very high-confidence metadata matches.
+- Persistent review queue for ambiguous remixes, edits, live versions, and other uncertain matches.
+- `tidal-match-metadata` command with an optional `--limit` for staged testing.
+- Automatic TIDAL rate-limit pacing and retry handling during catalogue imports.
 
 Next:
 
-1. Add metadata fallback matching with confidence scoring.
-2. Add a manual review queue for ambiguous matches.
-3. Create and populate managed TIDAL playlist mirrors.
-4. Implement delta sync for additions, removals, renames, and playlist lifecycle.
+1. Add commands to inspect, accept, reject, or manually link review candidates.
+2. Create and populate managed TIDAL playlist mirrors.
+3. Implement delta sync for additions, removals, renames, and playlist lifecycle.
 
 ## Local setup
 
@@ -128,6 +134,18 @@ Then process the remaining exact ISRC matches:
 dj-sync tidal-match-isrc
 ```
 
+Search TIDAL for the small set that did not match by ISRC. Start with a small limit:
+
+```bash
+dj-sync tidal-match-metadata --limit 5
+```
+
+Then process the remainder:
+
+```bash
+dj-sync tidal-match-metadata
+```
+
 Preview mode:
 
 ```bash
@@ -143,5 +161,3 @@ pytest
 ## Security
 
 OAuth tokens, `.env`, and the local SQLite database are intentionally excluded from Git. No Spotify or TIDAL credentials should ever be committed to the repository.
-
-- Automatic TIDAL rate-limit pacing and retry handling during large ISRC imports.

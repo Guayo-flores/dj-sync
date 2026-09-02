@@ -11,6 +11,7 @@ from dj_sync.spotify.ingest import ingest_managed_playlists
 from dj_sync.tidal.auth import TidalTokenStore, login_with_pkce as tidal_login_with_pkce
 from dj_sync.tidal.client import TidalClient
 from dj_sync.tidal.matcher import match_unmatched_tracks_by_isrc
+from dj_sync.tidal.metadata_matcher import match_unmatched_tracks_by_metadata
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -39,6 +40,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Match unmatched Spotify tracks to TIDAL by exact ISRC.",
     )
     isrc_parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Only process this many unmatched Spotify tracks.",
+    )
+
+    metadata_parser = subparsers.add_parser(
+        "tidal-match-metadata",
+        help="Search TIDAL for tracks that did not match by exact ISRC.",
+    )
+    metadata_parser.add_argument(
         "--limit",
         type=int,
         default=None,
@@ -166,6 +178,34 @@ def main() -> int:
         print(f"Invalid ISRCs:        {summary.invalid}")
         print(f"API batches:          {summary.batches}")
         print(f"Mapped tracks total:  {counts['matched']} / {counts['total']}")
+        return 0
+
+    if args.command == "tidal-match-metadata":
+        database.initialize()
+        token = _tidal_token(settings)
+        client = TidalClient(token.access_token)
+        print(
+            "Metadata fallback uses conservative auto-match rules; ambiguous "
+            "remixes/edits are held for review."
+        )
+        summary = match_unmatched_tracks_by_metadata(
+            client=client, database=database, limit=args.limit
+        )
+        counts = database.track_match_counts()
+        print("DJ Sync — TIDAL metadata matching")
+        print(f"Candidates processed: {summary.candidates}")
+        print(f"Automatic matches:    {summary.automatic}")
+        print(f"Needs review:         {summary.review}")
+        print(f"Not found/low score:  {summary.not_found}")
+        print(f"Mapped tracks total:  {counts['matched']} / {counts['total']}")
+        if summary.reviews:
+            print("\nReview candidates:")
+            for item in summary.reviews:
+                print(
+                    f"  ? {item.spotify_artist} — {item.spotify_title}\n"
+                    f"    → {item.tidal_artist} — {item.tidal_title} "
+                    f"({item.score:.1%})"
+                )
         return 0
 
     if args.command == "spotify-playlists":

@@ -3,11 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+import re
 import time
 from typing import Any, Callable
+from uuid import uuid4
 
 from dj_sync.matching.isrc import normalize_isrc
-from uuid import uuid4
 
 import requests
 
@@ -39,6 +40,7 @@ class TidalTrack:
     title: str
     isrc: str | None
     duration: str | None = None
+    artists: tuple[str, ...] = ()
 
     @classmethod
     def from_resource(cls, resource: dict[str, Any]) -> "TidalTrack":
@@ -49,6 +51,21 @@ class TidalTrack:
             isrc=attributes.get("isrc"),
             duration=attributes.get("duration"),
         )
+
+    @property
+    def duration_ms(self) -> int | None:
+        if not self.duration:
+            return None
+        match = re.fullmatch(
+            r"PT(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+(?:\.\d+)?)S)?",
+            self.duration,
+        )
+        if match is None:
+            return None
+        hours = int(match.group("hours") or 0)
+        minutes = int(match.group("minutes") or 0)
+        seconds = float(match.group("seconds") or 0)
+        return round(((hours * 60 + minutes) * 60 + seconds) * 1000)
 
 
 class TidalClient:
@@ -186,3 +203,71 @@ class TidalClient:
         )
         data = response.json().get("data") or []
         return [TidalTrack.from_resource(resource) for resource in data]
+
+    def search_tracks(self, query: str, *, limit: int = 10) -> list[TidalTrack]:
+        """Search TIDAL and return ranked track candidates with artist metadata."""
+        if not query.strip():
+            return []
+        if limit < 1:
+            return []
+
+        response = self._get_with_rate_limit_retry(
+            f"{self.base_url}/searchResults",
+            params={
+                "filter[query]": query[:256],
+                "include": ["tracks", "tracks.artists"],
+            },
+        )
+        payload = response.json()
+        search_resources = payload.get("data") or []
+        if not search_resources:
+            return []
+
+        track_relationship = (
+            (search_resources[0].get("relationships") or {}).get("tracks") or {}
+        )
+        relationship_data = track_relationship.get("data") or []
+        ranked_ids = [
+            str(identifier.get("id"))
+            for identifier in relationship_data
+            if identifier.get("type") == "tracks" and identifier.get("id") is not None
+        ][:limit]
+
+        included = payload.get("included") or []
+        resources = {
+            (str(resource.get("type")), str(resource.get("id"))): resource
+            for resource in included
+            if resource.get("type") is not None and resource.get("id") is not None
+        }
+        artist_names = {
+            str(resource["id"]): str((resource.get("attributes") or {}).get("name") or "")
+            for resource in included
+            if resource.get("type") == "artists" and resource.get("id") is not None
+        }
+
+        tracks: list[TidalTrack] = []
+        for track_id in ranked_ids:
+            resource = resources.get(("tracks", track_id))
+            if resource is None:
+                continue
+            track = TidalTrack.from_resource(resource)
+            artist_relationship = (
+                ((resource.get("relationships") or {}).get("artists") or {}).get("data")
+                or []
+            )
+            artists = tuple(
+                artist_names.get(str(identifier.get("id")), "")
+                for identifier in artist_relationship
+                if identifier.get("id") is not None
+                and artist_names.get(str(identifier.get("id")), "")
+            )
+            tracks.append(
+                TidalTrack(
+                    id=track.id,
+                    title=track.title,
+                    isrc=track.isrc,
+                    duration=track.duration,
+                    artists=artists,
+                )
+            )
+        return tracks

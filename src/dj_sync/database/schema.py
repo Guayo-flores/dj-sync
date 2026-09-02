@@ -50,6 +50,21 @@ ON playlist_tracks(playlist_id, position);
 CREATE INDEX IF NOT EXISTS idx_playlist_tracks_spotify_track
 ON playlist_tracks(spotify_track_id);
 
+CREATE TABLE IF NOT EXISTS match_candidates (
+    spotify_track_id TEXT PRIMARY KEY,
+    tidal_track_id TEXT,
+    tidal_title TEXT,
+    tidal_artist TEXT,
+    tidal_duration_ms INTEGER,
+    score REAL NOT NULL,
+    title_score REAL,
+    artist_score REAL,
+    duration_score REAL,
+    status TEXT NOT NULL CHECK (status IN ('review', 'not_found')),
+    searched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (spotify_track_id) REFERENCES tracks(spotify_track_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS sync_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
