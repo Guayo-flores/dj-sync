@@ -34,7 +34,7 @@ The SQLite database separates:
 - `playlist_tracks`: membership of tracks in each managed playlist.
 - `sync_runs`: sync history and result counts.
 
-## Current milestone: 0.2 - Spotify connection
+## Current milestone: 0.3 - Spotify + TIDAL authentication
 
 Implemented:
 
@@ -46,14 +46,17 @@ Implemented:
 - Secret-safe `.env.example` and `.gitignore`.
 - Spotify OAuth 2.0 PKCE foundation and local callback flow.
 - Current Spotify playlist listing with pagination and 2026 API fields.
+- Interactive managed-playlist selection persisted in SQLite.
+- TIDAL OAuth 2.1 Authorization Code + PKCE login flow.
+- Secret-safe local storage for TIDAL access and refresh tokens.
 
 Next:
 
-1. Interactive selection of managed Spotify playlists.
-2. Persist selected Spotify playlists in SQLite.
-3. Fetch playlist items and normalize track metadata.
-4. TIDAL OAuth and playlist creation.
-5. Track matching: ISRC first, metadata fallback.
+1. Verify TIDAL access with a read call.
+2. Create and delete a safe `DJ Sync Test` playlist.
+3. Fetch Spotify playlist items and normalize track metadata.
+4. Match tracks by ISRC first, metadata fallback second.
+5. Create and populate managed TIDAL playlist mirrors.
 
 ## Local setup
 
@@ -83,6 +86,12 @@ List playlists visible to DJ Sync:
 
 ```bash
 dj-sync spotify-playlists
+```
+
+Connect TIDAL after creating a TIDAL Developer app and setting `TIDAL_CLIENT_ID` in `.env`:
+
+```bash
+dj-sync tidal-login
 ```
 
 Preview mode:

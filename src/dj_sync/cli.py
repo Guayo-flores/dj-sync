@@ -7,6 +7,7 @@ from dj_sync.database.database import Database
 from dj_sync.playlist_selection import parse_selection
 from dj_sync.spotify.auth import SpotifyTokenStore, login_with_pkce
 from dj_sync.spotify.client import SpotifyClient, SpotifyPlaylist
+from dj_sync.tidal.auth import TidalTokenStore, login_with_pkce as tidal_login_with_pkce
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -21,6 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("spotify-playlists", help="List Spotify playlists visible to DJ Sync.")
     subparsers.add_parser("spotify-select", help="Choose which Spotify playlists DJ Sync manages.")
     subparsers.add_parser("managed-playlists", help="Show saved DJ Sync playlist selections.")
+    subparsers.add_parser("tidal-login", help="Authorize DJ Sync with TIDAL.")
 
     sync_parser = subparsers.add_parser("sync", help="Synchronize managed playlists.")
     sync_parser.add_argument(
@@ -73,6 +75,20 @@ def main() -> int:
             token_store=token_store,
         )
         print("Spotify connected successfully.")
+        return 0
+
+    if args.command == "tidal-login":
+        if not settings.tidal_client_id:
+            raise RuntimeError(
+                "TIDAL_CLIENT_ID is missing. Add it to your local .env file."
+            )
+        token_store = TidalTokenStore(settings.tidal_token_path)
+        tidal_login_with_pkce(
+            client_id=settings.tidal_client_id,
+            redirect_uri=settings.tidal_redirect_uri,
+            token_store=token_store,
+        )
+        print("TIDAL connected successfully.")
         return 0
 
     if args.command == "spotify-playlists":
