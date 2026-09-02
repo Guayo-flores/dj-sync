@@ -144,6 +144,7 @@ Then process the remainder:
 
 ```bash
 dj-sync tidal-match-metadata
+dj-sync review
 ```
 
 Preview mode:

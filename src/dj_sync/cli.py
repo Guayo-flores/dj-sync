@@ -12,6 +12,7 @@ from dj_sync.tidal.auth import TidalTokenStore, login_with_pkce as tidal_login_w
 from dj_sync.tidal.client import TidalClient
 from dj_sync.tidal.matcher import match_unmatched_tracks_by_isrc
 from dj_sync.tidal.metadata_matcher import match_unmatched_tracks_by_metadata
+from dj_sync.tidal.review import review_match_candidates
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -55,6 +56,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Only process this many unmatched Spotify tracks.",
+    )
+
+    subparsers.add_parser(
+        "review",
+        help="Interactively approve or reject ambiguous Spotify-to-TIDAL matches.",
     )
 
     sync_parser = subparsers.add_parser("sync", help="Synchronize managed playlists.")
@@ -206,6 +212,19 @@ def main() -> int:
                     f"    → {item.tidal_artist} — {item.tidal_title} "
                     f"({item.score:.1%})"
                 )
+        return 0
+
+    if args.command == "review":
+        database.initialize()
+        summary = review_match_candidates(database=database)
+        counts = database.track_match_counts()
+        remaining = len(database.list_match_candidates(status="review"))
+        print("\nDJ Sync — Review summary")
+        print(f"Approved:             {summary.approved}")
+        print(f"Rejected candidates:  {summary.rejected}")
+        print(f"Deferred:             {summary.deferred}")
+        print(f"Still awaiting review:{remaining:>3}")
+        print(f"Mapped tracks total:  {counts['matched']} / {counts['total']}")
         return 0
 
     if args.command == "spotify-playlists":

@@ -302,6 +302,22 @@ class Database:
                 (status,),
             ).fetchall()
 
+    def reject_match_candidate(self, spotify_track_id: str) -> None:
+        """Reject the currently suggested TIDAL candidate without rematching it.
+
+        The candidate is retained as ``not_found`` so future metadata matching
+        runs do not immediately propose the same rejected recording again.
+        """
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE match_candidates
+                SET status = 'not_found', searched_at = CURRENT_TIMESTAMP
+                WHERE spotify_track_id = ? AND status = 'review'
+                """,
+                (spotify_track_id,),
+            )
+
     def save_track_match(
         self,
         *,
