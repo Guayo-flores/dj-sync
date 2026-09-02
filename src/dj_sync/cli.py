@@ -7,6 +7,7 @@ from dj_sync.database.database import Database
 from dj_sync.playlist_selection import parse_selection
 from dj_sync.spotify.auth import SpotifyTokenStore, login_with_pkce
 from dj_sync.spotify.client import SpotifyClient, SpotifyPlaylist
+from dj_sync.spotify.ingest import ingest_managed_playlists
 from dj_sync.tidal.auth import TidalTokenStore, login_with_pkce as tidal_login_with_pkce
 from dj_sync.tidal.client import TidalClient
 
@@ -23,6 +24,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("spotify-playlists", help="List Spotify playlists visible to DJ Sync.")
     subparsers.add_parser("spotify-select", help="Choose which Spotify playlists DJ Sync manages.")
     subparsers.add_parser("managed-playlists", help="Show saved DJ Sync playlist selections.")
+    subparsers.add_parser(
+        "spotify-ingest",
+        help="Fetch and persist normalized tracks from managed Spotify playlists.",
+    )
     subparsers.add_parser("tidal-login", help="Authorize DJ Sync with TIDAL.")
     subparsers.add_parser(
         "tidal-write-test",
@@ -159,6 +164,28 @@ def main() -> int:
         print(f"\nSaved {len(selected)} managed playlist(s).")
         for playlist in selected:
             print(f"  ✓ {playlist.name}")
+        return 0
+
+    if args.command == "spotify-ingest":
+        database.initialize()
+        token = _spotify_token(settings)
+        client = SpotifyClient(token.access_token)
+        managed = database.list_managed_playlists()
+        if not managed:
+            print("No managed playlists saved yet. Run: dj-sync spotify-select")
+            return 0
+
+        print(f"DJ Sync — Spotify ingestion ({len(managed)} managed playlists)")
+        summary = ingest_managed_playlists(client=client, database=database)
+        for result in summary.playlists:
+            skipped = f", {result.skipped_items} skipped" if result.skipped_items else ""
+            print(f"  ✓ {result.name}: {result.tracks_saved} tracks{skipped}")
+
+        print("\nSpotify ingestion complete.")
+        print(f"Playlist entries saved: {summary.total_tracks_saved}")
+        print(f"Unique Spotify tracks: {summary.unique_tracks}")
+        if summary.total_skipped_items:
+            print(f"Skipped non-track/local/unavailable items: {summary.total_skipped_items}")
         return 0
 
     if args.command == "managed-playlists":

@@ -34,7 +34,7 @@ The SQLite database separates:
 - `playlist_tracks`: membership of tracks in each managed playlist.
 - `sync_runs`: sync history and result counts.
 
-## Current milestone: 0.4 - TIDAL playlist write verification
+## Current milestone: 0.5 - Spotify track ingestion
 
 Implemented:
 
@@ -51,14 +51,17 @@ Implemented:
 - Secret-safe local storage for TIDAL access and refresh tokens.
 - TIDAL JSON:API client for playlist create/read/delete operations.
 - Safe `tidal-write-test` command that creates, verifies, and deletes a temporary playlist.
+- Spotify managed-playlist ingestion with current 50-item API pagination.
+- Normalized track metadata: Spotify ID/URI, ISRC, title, artists, album, duration, added date, and playlist position.
+- Global track deduplication across playlists while preserving duplicate entries within a playlist.
+- SQLite migration support for the new track metadata and position-based membership model.
 
 Next:
 
-1. Fetch Spotify playlist items and normalize track metadata.
-2. Add TIDAL search and ISRC-first track matching.
-3. Add metadata fallback matching with confidence scoring.
-4. Create and populate managed TIDAL playlist mirrors.
-5. Implement delta sync for additions, removals, renames, and playlist lifecycle.
+1. Add TIDAL search and ISRC-first track matching.
+2. Add metadata fallback matching with confidence scoring.
+3. Create and populate managed TIDAL playlist mirrors.
+4. Implement delta sync for additions, removals, renames, and playlist lifecycle.
 
 ## Local setup
 
@@ -100,6 +103,12 @@ Verify TIDAL playlist read/write/delete access without touching managed playlist
 
 ```bash
 dj-sync tidal-write-test
+```
+
+Fetch and persist normalized tracks from all managed Spotify playlists:
+
+```bash
+dj-sync spotify-ingest
 ```
 
 Preview mode:

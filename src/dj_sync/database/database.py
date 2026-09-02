@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Sequence
 
 from dj_sync.database.schema import SCHEMA
+from dj_sync.spotify.normalizer import NormalizedPlaylistTrack
 
 
 class Database:
@@ -21,6 +22,59 @@ class Database:
     def initialize(self) -> None:
         with self.connect() as connection:
             connection.executescript(SCHEMA)
+            self._migrate_tracks_columns(connection)
+            self._migrate_playlist_tracks_primary_key(connection)
+
+    @staticmethod
+    def _column_names(connection: sqlite3.Connection, table: str) -> set[str]:
+        rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
+        return {row["name"] for row in rows}
+
+    def _migrate_tracks_columns(self, connection: sqlite3.Connection) -> None:
+        columns = self._column_names(connection, "tracks")
+        if "album" not in columns:
+            connection.execute("ALTER TABLE tracks ADD COLUMN album TEXT")
+        if "spotify_uri" not in columns:
+            connection.execute("ALTER TABLE tracks ADD COLUMN spotify_uri TEXT")
+
+    @staticmethod
+    def _migrate_playlist_tracks_primary_key(connection: sqlite3.Connection) -> None:
+        info = connection.execute("PRAGMA table_info(playlist_tracks)").fetchall()
+        primary_key_columns = [
+            row["name"] for row in sorted(info, key=lambda row: row["pk"]) if row["pk"]
+        ]
+        if primary_key_columns == ["playlist_id", "position"]:
+            return
+
+        connection.execute("ALTER TABLE playlist_tracks RENAME TO playlist_tracks_legacy")
+        connection.executescript(
+            """
+            CREATE TABLE playlist_tracks (
+                playlist_id INTEGER NOT NULL,
+                spotify_track_id TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                added_at TEXT,
+                last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (playlist_id, position),
+                FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
+                FOREIGN KEY (spotify_track_id) REFERENCES tracks(spotify_track_id) ON DELETE RESTRICT
+            );
+            CREATE INDEX IF NOT EXISTS idx_playlist_tracks_position
+            ON playlist_tracks(playlist_id, position);
+            CREATE INDEX IF NOT EXISTS idx_playlist_tracks_spotify_track
+            ON playlist_tracks(spotify_track_id);
+            """
+        )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO playlist_tracks (
+                playlist_id, spotify_track_id, position, added_at, last_seen_at
+            )
+            SELECT playlist_id, spotify_track_id, position, added_at, last_seen_at
+            FROM playlist_tracks_legacy
+            """
+        )
+        connection.execute("DROP TABLE playlist_tracks_legacy")
 
     def table_names(self) -> set[str]:
         with self.connect() as connection:
@@ -80,3 +134,97 @@ class Database:
                 ORDER BY spotify_name COLLATE NOCASE
                 """
             ).fetchall()
+
+    def list_managed_playlists(self) -> list[sqlite3.Row]:
+        with self.connect() as connection:
+            return connection.execute(
+                """
+                SELECT id, spotify_playlist_id, spotify_name
+                FROM playlists
+                WHERE status = 'managed' AND managed_by_dj_sync = 1
+                ORDER BY spotify_name COLLATE NOCASE
+                """
+            ).fetchall()
+
+    def replace_spotify_playlist_snapshot(
+        self,
+        spotify_playlist_id: str,
+        tracks: Sequence[NormalizedPlaylistTrack],
+    ) -> None:
+        """Persist the latest observed Spotify state for one managed playlist.
+
+        Track metadata is global, while playlist membership is replaced as a
+        snapshot. Position is the membership key so duplicate songs in the same
+        playlist are preserved.
+        """
+        with self.connect() as connection:
+            playlist = connection.execute(
+                "SELECT id FROM playlists WHERE spotify_playlist_id = ?",
+                (spotify_playlist_id,),
+            ).fetchone()
+            if playlist is None:
+                raise KeyError(f"Unknown managed Spotify playlist: {spotify_playlist_id}")
+
+            for item in tracks:
+                track = item.track
+                connection.execute(
+                    """
+                    INSERT INTO tracks (
+                        spotify_track_id, isrc, title, artist, album, spotify_uri,
+                        duration_ms, last_seen_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(spotify_track_id) DO UPDATE SET
+                        isrc = excluded.isrc,
+                        title = excluded.title,
+                        artist = excluded.artist,
+                        album = excluded.album,
+                        spotify_uri = excluded.spotify_uri,
+                        duration_ms = excluded.duration_ms,
+                        last_seen_at = CURRENT_TIMESTAMP
+                    """,
+                    (
+                        track.spotify_id,
+                        track.isrc,
+                        track.title,
+                        track.artist,
+                        track.album,
+                        track.spotify_uri,
+                        track.duration_ms,
+                    ),
+                )
+
+            playlist_id = playlist["id"]
+            connection.execute(
+                "DELETE FROM playlist_tracks WHERE playlist_id = ?", (playlist_id,)
+            )
+            connection.executemany(
+                """
+                INSERT INTO playlist_tracks (
+                    playlist_id, spotify_track_id, position, added_at, last_seen_at
+                )
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                [
+                    (playlist_id, item.track.spotify_id, item.position, item.added_at)
+                    for item in tracks
+                ],
+            )
+
+    def count_tracks(self) -> int:
+        with self.connect() as connection:
+            row = connection.execute("SELECT COUNT(*) AS count FROM tracks").fetchone()
+        return int(row["count"])
+
+    def count_playlist_tracks(self, spotify_playlist_id: str) -> int:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM playlist_tracks pt
+                JOIN playlists p ON p.id = pt.playlist_id
+                WHERE p.spotify_playlist_id = ?
+                """,
+                (spotify_playlist_id,),
+            ).fetchone()
+        return int(row["count"])

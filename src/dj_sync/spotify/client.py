@@ -69,7 +69,7 @@ class SpotifyClient:
 
     def iter_playlist_items(self, playlist_id: str) -> Iterator[dict[str, Any]]:
         offset = 0
-        limit = 100
+        limit = 50
         while True:
             payload = self._get(
                 f"/playlists/{playlist_id}/items",

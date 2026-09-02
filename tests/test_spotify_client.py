@@ -62,3 +62,12 @@ def test_iter_playlists_handles_pagination_and_2026_items_summary() -> None:
     assert len(session.calls) == 2
     assert session.calls[0][1]["params"]["offset"] == 0
     assert session.calls[1][1]["params"]["offset"] == 1
+
+
+def test_iter_playlist_items_uses_current_50_item_page_limit() -> None:
+    session = FakeSession([{"items": [], "next": None}])
+    client = SpotifyClient("token", session=session)
+
+    assert list(client.iter_playlist_items("playlist-1")) == []
+
+    assert session.calls[0][1]["params"]["limit"] == 50

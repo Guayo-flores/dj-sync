@@ -24,3 +24,60 @@ def test_managed_playlist_selection_can_be_saved_and_paused(tmp_path) -> None:
     rows = {row["spotify_playlist_id"]: row for row in database.list_playlists()}
     assert rows["spotify-a"]["status"] == "managed"
     assert rows["spotify-b"]["status"] == "paused"
+
+
+def test_database_migrates_existing_track_columns_and_playlist_membership_key(tmp_path) -> None:
+    import sqlite3
+
+    path = tmp_path / "legacy.db"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE playlists (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            spotify_playlist_id TEXT NOT NULL UNIQUE,
+            spotify_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'managed',
+            managed_by_dj_sync INTEGER NOT NULL DEFAULT 1,
+            pending_deletion INTEGER NOT NULL DEFAULT 0,
+            tidal_playlist_id TEXT UNIQUE,
+            tidal_name TEXT,
+            last_synced_at TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE tracks (
+            spotify_track_id TEXT PRIMARY KEY,
+            tidal_track_id TEXT,
+            isrc TEXT,
+            title TEXT NOT NULL,
+            artist TEXT NOT NULL,
+            duration_ms INTEGER NOT NULL,
+            match_method TEXT,
+            match_score REAL,
+            first_matched_at TEXT,
+            last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE playlist_tracks (
+            playlist_id INTEGER NOT NULL,
+            spotify_track_id TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            added_at TEXT,
+            last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (playlist_id, spotify_track_id)
+        );
+        CREATE TABLE sync_runs (id INTEGER PRIMARY KEY AUTOINCREMENT);
+        """
+    )
+    connection.close()
+
+    database = Database(path)
+    database.initialize()
+
+    with database.connect() as migrated:
+        track_columns = {row["name"] for row in migrated.execute("PRAGMA table_info(tracks)")}
+        membership_info = migrated.execute("PRAGMA table_info(playlist_tracks)").fetchall()
+    primary_key = [row["name"] for row in sorted(membership_info, key=lambda row: row["pk"]) if row["pk"]]
+
+    assert {"album", "spotify_uri"}.issubset(track_columns)
+    assert primary_key == ["playlist_id", "position"]

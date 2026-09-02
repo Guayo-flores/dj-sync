@@ -16,6 +16,8 @@ class Track:
     artist: str
     duration_ms: int
     isrc: str | None = None
+    album: str | None = None
+    spotify_uri: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

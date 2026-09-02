@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS tracks (
     isrc TEXT,
     title TEXT NOT NULL,
     artist TEXT NOT NULL,
+    album TEXT,
+    spotify_uri TEXT,
     duration_ms INTEGER NOT NULL,
     match_method TEXT,
     match_score REAL,
@@ -37,13 +39,16 @@ CREATE TABLE IF NOT EXISTS playlist_tracks (
     position INTEGER NOT NULL,
     added_at TEXT,
     last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (playlist_id, spotify_track_id),
+    PRIMARY KEY (playlist_id, position),
     FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
     FOREIGN KEY (spotify_track_id) REFERENCES tracks(spotify_track_id) ON DELETE RESTRICT
 );
 
 CREATE INDEX IF NOT EXISTS idx_playlist_tracks_position
 ON playlist_tracks(playlist_id, position);
+
+CREATE INDEX IF NOT EXISTS idx_playlist_tracks_spotify_track
+ON playlist_tracks(spotify_track_id);
 
 CREATE TABLE IF NOT EXISTS sync_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
