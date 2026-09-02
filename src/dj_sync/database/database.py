@@ -229,6 +229,19 @@ class Database:
         with self.connect() as connection:
             return connection.execute(query, params).fetchall()
 
+    def list_unmatched_tracks(self) -> list[sqlite3.Row]:
+        """Return every ingested Spotify track that still lacks a TIDAL mapping."""
+        with self.connect() as connection:
+            return connection.execute(
+                """
+                SELECT spotify_track_id, isrc, title, artist, album, duration_ms,
+                       match_method, match_score
+                FROM tracks
+                WHERE tidal_track_id IS NULL
+                ORDER BY artist COLLATE NOCASE, title COLLATE NOCASE
+                """
+            ).fetchall()
+
     def list_tracks_pending_metadata_match(self, limit: int | None = None) -> list[sqlite3.Row]:
         query = """
             SELECT spotify_track_id, isrc, title, artist, duration_ms

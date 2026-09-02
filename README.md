@@ -35,7 +35,7 @@ The SQLite database separates:
 - `match_candidates`: ambiguous metadata matches held for manual review.
 - `sync_runs`: sync history and result counts.
 
-## Current milestone: 0.7 - Metadata fallback matching
+## Current milestone: 0.9 - Manual unmatched-track resolution
 
 Implemented:
 
@@ -66,12 +66,14 @@ Implemented:
 - Automatic linking only for very high-confidence metadata matches.
 - Persistent review queue for ambiguous remixes, edits, live versions, and other uncertain matches.
 - `tidal-match-metadata` command with an optional `--limit` for staged testing.
+- Interactive `review` command for approving or rejecting ambiguous metadata candidates.
+- Interactive `resolve-unmatched` command with custom TIDAL searches and explicit numbered-result approval.
 - Automatic TIDAL rate-limit pacing and retry handling during catalogue imports.
 
 Next:
 
-1. Add commands to inspect, accept, reject, or manually link review candidates.
-2. Create and populate managed TIDAL playlist mirrors.
+1. Create and populate managed TIDAL playlist mirrors.
+2. Report any unresolved tracks that cannot be mirrored to TIDAL.
 3. Implement delta sync for additions, removals, renames, and playlist lifecycle.
 
 ## Local setup
@@ -145,6 +147,12 @@ Then process the remainder:
 ```bash
 dj-sync tidal-match-metadata
 dj-sync review
+```
+
+Manually search and resolve any recordings that still do not have a TIDAL mapping:
+
+```bash
+dj-sync resolve-unmatched
 ```
 
 Preview mode:
