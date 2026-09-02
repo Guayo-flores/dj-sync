@@ -201,3 +201,15 @@ pytest
 ## Security
 
 OAuth tokens, `.env`, and the local SQLite database are intentionally excluded from Git. No Spotify or TIDAL credentials should ever be committed to the repository.
+
+### Playlist lifecycle safety
+
+DJ Sync treats Spotify as the source of truth for managed playlists while keeping destructive playlist deletion explicit:
+
+- Spotify playlist renames are detected during normal sync and mirrored to TIDAL.
+- Newly selected playlists are created on TIDAL automatically on the next applied sync.
+- Unselected playlists are paused and their TIDAL copies are left alone.
+- A managed playlist that disappears from Spotify is marked as pending deletion and excluded from active sync instead of crashing or deleting TIDAL immediately.
+- Run `dj-sync playlist-cleanup` to either delete the linked TIDAL copy or keep it as a paused standalone playlist.
+
+Use `dj-sync managed-playlists` to see managed, paused, and pending-deletion states.

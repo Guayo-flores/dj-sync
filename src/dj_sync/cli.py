@@ -19,6 +19,7 @@ from dj_sync.tidal.manual_resolution import resolve_unmatched_tracks
 from dj_sync.tidal.metadata_matcher import match_unmatched_tracks_by_metadata
 from dj_sync.tidal.review import review_match_candidates
 from dj_sync.sync.incremental import build_incremental_sync_plan, execute_incremental_sync
+from dj_sync.sync.lifecycle import cleanup_pending_playlists, refresh_playlist_lifecycle
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,6 +34,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("spotify-playlists", help="List Spotify playlists visible to DJ Sync.")
     subparsers.add_parser("spotify-select", help="Choose which Spotify playlists DJ Sync manages.")
     subparsers.add_parser("managed-playlists", help="Show saved DJ Sync playlist selections.")
+    subparsers.add_parser(
+        "playlist-cleanup",
+        help="Resolve Spotify playlists that were deleted while keeping TIDAL safe by default.",
+    )
     subparsers.add_parser(
         "spotify-ingest",
         help="Fetch and persist normalized tracks from managed Spotify playlists.",
@@ -339,8 +344,29 @@ def main() -> int:
             print("No managed playlists saved yet. Run: dj-sync spotify-select")
             return 0
         for row in rows:
-            marker = "✓" if row["status"] == "managed" else "⏸"
-            print(f"{marker} {row['spotify_name']} [{row['status']}]")
+            if row["pending_deletion"]:
+                marker = "⚠"
+                status = "missing on Spotify — cleanup pending"
+            elif row["status"] == "managed":
+                marker = "✓"
+                status = "managed"
+            else:
+                marker = "⏸"
+                status = "paused"
+            tidal = " linked to TIDAL" if row["tidal_playlist_id"] else ""
+            print(f"{marker} {row['spotify_name']} [{status}]{tidal}")
+        return 0
+
+    if args.command == "playlist-cleanup":
+        database.initialize()
+        token = _tidal_token(settings)
+        client = TidalClient(token.access_token)
+        summary = cleanup_pending_playlists(client=client, database=database)
+        print("\nDJ Sync — Playlist cleanup summary")
+        print(f"Deleted from TIDAL: {summary.deleted}")
+        print(f"Kept + paused:      {summary.kept}")
+        print(f"Skipped:            {summary.skipped}")
+        print(f"Still pending:      {summary.remaining}")
         return 0
 
     if args.command == "sync":
@@ -349,6 +375,9 @@ def main() -> int:
         # A sync command always refreshes Spotify first. The local SQLite snapshot
         # is a cache/state store; Spotify remains the source of truth.
         spotify_client = _spotify_client(settings)
+        lifecycle_summary = refresh_playlist_lifecycle(
+            client=spotify_client, database=database
+        )
         ingest_summary = ingest_managed_playlists(client=spotify_client, database=database)
 
         tidal_token = _tidal_token(settings)
@@ -370,8 +399,15 @@ def main() -> int:
         )
 
         print("DJ Sync — refreshed source state")
-        print(f"Spotify playlists refreshed: {len(ingest_summary.playlists)}")
+        print(f"Spotify playlists visible:   {lifecycle_summary.visible_playlists}")
+        print(f"Managed playlists refreshed: {len(ingest_summary.playlists)}")
         print(f"Spotify playlist entries:    {ingest_summary.total_tracks_saved}")
+        if lifecycle_summary.renamed:
+            print(f"Playlist renames detected:   {len(lifecycle_summary.renamed)}")
+        if lifecycle_summary.newly_missing:
+            print(f"New missing playlists:       {len(lifecycle_summary.newly_missing)}")
+        if lifecycle_summary.restored:
+            print(f"Restored playlists:          {len(lifecycle_summary.restored)}")
         print(f"New exact ISRC matches:      {isrc_summary.matched}")
         print(f"New metadata matches:        {metadata_summary.automatic}")
         if metadata_summary.review:
@@ -404,6 +440,13 @@ def main() -> int:
                         f"         ! skip #{item.position + 1}: "
                         f"{item.artist} — {item.title}"
                     )
+
+            pending = database.list_pending_deletion_playlists()
+            if pending:
+                print("\n  ⚠ Spotify playlist deletion(s) awaiting cleanup:")
+                for row in pending:
+                    print(f"    - {row['spotify_name']} (TIDAL copy preserved)")
+                print("    Run: dj-sync playlist-cleanup")
 
             print("\nDry run only — TIDAL was not modified.")
             return 0

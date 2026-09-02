@@ -111,14 +111,14 @@ class Database:
         with self.connect() as connection:
             if not selected:
                 connection.execute(
-                    "UPDATE playlists SET status = 'paused', updated_at = CURRENT_TIMESTAMP"
+                    "UPDATE playlists SET status = 'paused', pending_deletion = 0, updated_at = CURRENT_TIMESTAMP"
                 )
                 return
             placeholders = ",".join("?" for _ in selected)
             connection.execute(
                 f"""
                 UPDATE playlists
-                SET status = 'paused', updated_at = CURRENT_TIMESTAMP
+                SET status = 'paused', pending_deletion = 0, updated_at = CURRENT_TIMESTAMP
                 WHERE spotify_playlist_id NOT IN ({placeholders})
                 """,
                 selected,
@@ -142,6 +142,7 @@ class Database:
                 SELECT id, spotify_playlist_id, spotify_name
                 FROM playlists
                 WHERE status = 'managed' AND managed_by_dj_sync = 1
+                  AND pending_deletion = 0
                 ORDER BY spotify_name COLLATE NOCASE
                 """
             ).fetchall()
@@ -154,9 +155,90 @@ class Database:
                        tidal_playlist_id, tidal_name, last_synced_at
                 FROM playlists
                 WHERE status = 'managed' AND managed_by_dj_sync = 1
+                  AND pending_deletion = 0
                 ORDER BY spotify_name COLLATE NOCASE
                 """
             ).fetchall()
+
+
+    def list_managed_playlist_lifecycle_rows(self) -> list[sqlite3.Row]:
+        """Return managed playlists including ones currently pending deletion."""
+        with self.connect() as connection:
+            return connection.execute(
+                """
+                SELECT id, spotify_playlist_id, spotify_name, tidal_playlist_id,
+                       tidal_name, pending_deletion
+                FROM playlists
+                WHERE status = 'managed' AND managed_by_dj_sync = 1
+                ORDER BY spotify_name COLLATE NOCASE
+                """
+            ).fetchall()
+
+    def refresh_managed_playlist_metadata(self, spotify_playlist_id: str, name: str) -> None:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE playlists
+                SET spotify_name = ?, pending_deletion = 0, updated_at = CURRENT_TIMESTAMP
+                WHERE spotify_playlist_id = ?
+                  AND status = 'managed'
+                  AND managed_by_dj_sync = 1
+                """,
+                (name, spotify_playlist_id),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"Unknown managed Spotify playlist: {spotify_playlist_id}")
+
+    def mark_playlist_pending_deletion(self, spotify_playlist_id: str) -> None:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE playlists
+                SET pending_deletion = 1, updated_at = CURRENT_TIMESTAMP
+                WHERE spotify_playlist_id = ?
+                  AND status = 'managed'
+                  AND managed_by_dj_sync = 1
+                """,
+                (spotify_playlist_id,),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"Unknown managed Spotify playlist: {spotify_playlist_id}")
+
+    def list_pending_deletion_playlists(self) -> list[sqlite3.Row]:
+        with self.connect() as connection:
+            return connection.execute(
+                """
+                SELECT spotify_playlist_id, spotify_name, tidal_playlist_id, tidal_name
+                FROM playlists
+                WHERE status = 'managed'
+                  AND managed_by_dj_sync = 1
+                  AND pending_deletion = 1
+                ORDER BY spotify_name COLLATE NOCASE
+                """
+            ).fetchall()
+
+    def keep_pending_playlist_as_paused(self, spotify_playlist_id: str) -> None:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE playlists
+                SET status = 'paused', pending_deletion = 0, updated_at = CURRENT_TIMESTAMP
+                WHERE spotify_playlist_id = ? AND pending_deletion = 1
+                """,
+                (spotify_playlist_id,),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"Playlist is not pending deletion: {spotify_playlist_id}")
+
+    def delete_playlist_record(self, spotify_playlist_id: str) -> None:
+        """Remove one DJ Sync playlist mapping; global track mappings are preserved."""
+        with self.connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM playlists WHERE spotify_playlist_id = ?",
+                (spotify_playlist_id,),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"Unknown Spotify playlist: {spotify_playlist_id}")
 
     def list_playlist_tracks_for_sync(self, playlist_id: int) -> list[sqlite3.Row]:
         """Return one playlist snapshot in Spotify order with TIDAL mappings."""
