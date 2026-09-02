@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
+import requests
+
 from dj_sync.database.database import Database
 from dj_sync.sync.planner import UnmatchedPlaylistTrack
 from dj_sync.tidal.client import TidalClient, TidalPlaylistItem
@@ -273,6 +275,103 @@ def _reconcile_playlist_items(
     return added, len(removals)
 
 
+
+def _create_verified_replacement_playlist(
+    *,
+    client: TidalClient,
+    name: str,
+    desired_ids: tuple[str, ...],
+) -> str:
+    """Create a replacement mirror and verify it before returning its id.
+
+    This is used only when TIDAL rejects the documented playlist PATCH rename
+    operation. The old playlist is deliberately left untouched until this new
+    mirror has been populated and verified in Spotify order.
+    """
+    replacement = client.create_playlist(
+        name,
+        description="Mirrored from Spotify by DJ Sync.",
+    )
+    try:
+        for batch in _chunks_ids(desired_ids, 50):
+            result = client.add_playlist_tracks(replacement.id, batch)
+            if result.skipped_ids:
+                raise RuntimeError(
+                    "TIDAL skipped mapped track(s) while creating rename fallback: "
+                    + ", ".join(result.skipped_ids)
+                )
+
+        replacement_items = tuple(client.iter_playlist_items(replacement.id))
+        replacement_ids = tuple(item.id for item in replacement_items)
+        if replacement_ids != desired_ids:
+            raise RuntimeError(
+                "TIDAL rename fallback verification failed; the original playlist "
+                "was left untouched."
+            )
+        return replacement.id
+    except Exception:
+        # Best-effort cleanup. Never sacrifice the known-good original playlist
+        # when constructing the replacement fails.
+        try:
+            client.delete_playlist(replacement.id)
+        except Exception:
+            pass
+        raise
+
+
+def _rename_with_safe_fallback(
+    *,
+    client: TidalClient,
+    database: Database,
+    playlist: IncrementalPlaylistPlan,
+    tidal_playlist_id: str,
+) -> tuple[str, bool]:
+    """Rename a managed mirror, recreating it only on TIDAL PATCH 403.
+
+    TIDAL documents PATCH /playlists/{id} for third-party ``playlists.write``
+    apps, but some developer accounts currently receive 403 specifically for
+    that operation while create/add/remove continue to work. In that narrow
+    case, make and verify a replacement first, then delete the old DJ Sync
+    mirror and atomically move our mapping to the replacement.
+    """
+    try:
+        updated = client.update_playlist_name(tidal_playlist_id, playlist.spotify_name)
+    except requests.HTTPError as exc:
+        response = exc.response
+        if response is None or response.status_code != 403:
+            raise
+
+        replacement_id = _create_verified_replacement_playlist(
+            client=client,
+            name=playlist.spotify_name,
+            desired_ids=playlist.desired_track_ids,
+        )
+        try:
+            client.delete_playlist(tidal_playlist_id)
+        except Exception:
+            # Keep the original authoritative mirror if we cannot finish the
+            # swap. Remove the temporary replacement when possible.
+            try:
+                client.delete_playlist(replacement_id)
+            except Exception:
+                pass
+            raise RuntimeError(
+                "TIDAL rejected playlist rename and DJ Sync could not safely "
+                "replace the old mirror; no database mapping was changed."
+            ) from exc
+
+        database.save_tidal_playlist_mapping(
+            playlist.spotify_playlist_id,
+            replacement_id,
+            playlist.spotify_name,
+        )
+        return replacement_id, True
+
+    database.save_tidal_playlist_mapping(
+        playlist.spotify_playlist_id, tidal_playlist_id, updated.name
+    )
+    return tidal_playlist_id, False
+
 def execute_incremental_sync(
     *,
     client: TidalClient,
@@ -331,19 +430,29 @@ def execute_incremental_sync(
                     "DJ Sync will not modify it automatically."
                 )
 
+        rename_recreated = False
         if playlist.rename and not created:
-            updated = client.update_playlist_name(tidal_playlist_id, playlist.spotify_name)
-            database.save_tidal_playlist_mapping(
-                playlist.spotify_playlist_id, tidal_playlist_id, updated.name
+            tidal_playlist_id, rename_recreated = _rename_with_safe_fallback(
+                client=client,
+                database=database,
+                playlist=playlist,
+                tidal_playlist_id=tidal_playlist_id,
             )
             renamed = True
 
-        added, removed = _reconcile_playlist_items(
-            client=client,
-            playlist_id=tidal_playlist_id,
-            current_items=current_items,
-            desired_ids=playlist.desired_track_ids,
-        )
+        if rename_recreated:
+            # The replacement was built directly from the desired Spotify
+            # snapshot, so there is nothing left to reconcile. Report the
+            # semantic delta from the plan rather than the physical full copy.
+            added = playlist.tracks_to_add
+            removed = playlist.tracks_to_remove
+        else:
+            added, removed = _reconcile_playlist_items(
+                client=client,
+                playlist_id=tidal_playlist_id,
+                current_items=current_items,
+                desired_ids=playlist.desired_track_ids,
+            )
         database.mark_playlist_synced(playlist.spotify_playlist_id)
         results.append(
             PlaylistIncrementalResult(

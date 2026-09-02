@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import requests
+
 from dj_sync.database.database import Database
 from dj_sync.models import Track
 from dj_sync.spotify.normalizer import NormalizedPlaylistTrack
@@ -60,6 +62,10 @@ class FakeIncrementalTidalClient:
         playlist = TidalPlaylist(id=playlist_id, name=name)
         self.playlists[playlist_id] = playlist
         return playlist
+
+    def delete_playlist(self, playlist_id: str) -> None:
+        self.playlists.pop(playlist_id, None)
+        self.items.pop(playlist_id, None)
 
     def remove_playlist_items(self, playlist_id: str, items: list[TidalPlaylistItem]) -> None:
         remove_ids = {item.item_id for item in items}
@@ -207,3 +213,38 @@ def test_existing_mapped_playlist_update_does_not_scan_all_owned_playlists(tmp_p
     assert summary.playlists_renamed == 1
     assert client.playlists["tidal-playlist"].name == "New Spotify Name"
 
+
+
+def test_incremental_executor_recreates_playlist_when_tidal_patch_rename_is_forbidden(
+    tmp_path,
+) -> None:
+    database = prepared_database(tmp_path, ["a", "b"], name="New Spotify Name")
+
+    class PatchForbiddenClient(FakeIncrementalTidalClient):
+        def update_playlist_name(self, playlist_id: str, name: str) -> TidalPlaylist:
+            response = requests.Response()
+            response.status_code = 403
+            response.url = f"https://openapi.tidal.com/v2/playlists/{playlist_id}"
+            raise requests.HTTPError("403 Client Error: Forbidden", response=response)
+
+    client = PatchForbiddenClient()
+    client.seed("tidal-playlist", "Old TIDAL Name", ["tidal-a", "tidal-b"])
+    plan = build_incremental_sync_plan(client=client, database=database)
+
+    summary = execute_incremental_sync(client=client, database=database, plan=plan)
+
+    assert "tidal-playlist" not in client.playlists
+    replacement_id = next(iter(client.playlists))
+    assert client.playlists[replacement_id].name == "New Spotify Name"
+    assert [item.id for item in client.items[replacement_id]] == ["tidal-a", "tidal-b"]
+    with database.connect() as connection:
+        row = connection.execute(
+            "SELECT tidal_playlist_id, tidal_name FROM playlists WHERE spotify_playlist_id = ?",
+            ("spotify-playlist",),
+        ).fetchone()
+    assert row is not None
+    assert row["tidal_playlist_id"] == replacement_id
+    assert row["tidal_name"] == "New Spotify Name"
+    assert summary.playlists_renamed == 1
+    assert summary.tracks_added == 0
+    assert summary.tracks_removed == 0

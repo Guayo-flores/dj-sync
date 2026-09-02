@@ -208,7 +208,7 @@ OAuth tokens, `.env`, and the local SQLite database are intentionally excluded f
 
 DJ Sync treats Spotify as the source of truth for managed playlists while keeping destructive playlist deletion explicit:
 
-- Spotify playlist renames are detected during normal sync and mirrored to TIDAL.
+- Spotify playlist renames are detected during normal sync and mirrored to TIDAL. If TIDAL rejects the documented direct rename operation with HTTP 403, DJ Sync safely recreates and verifies only that managed mirror under the new name before retiring the old mirror.
 - Newly selected playlists are created on TIDAL automatically on the next applied sync.
 - Unselected playlists are paused and their TIDAL copies are left alone.
 - A managed playlist that disappears from Spotify is marked as pending deletion and excluded from active sync instead of crashing or deleting TIDAL immediately.
