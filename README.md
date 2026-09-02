@@ -34,7 +34,7 @@ The SQLite database separates:
 - `playlist_tracks`: membership of tracks in each managed playlist.
 - `sync_runs`: sync history and result counts.
 
-## Current milestone: 0.3 - Spotify + TIDAL authentication
+## Current milestone: 0.4 - TIDAL playlist write verification
 
 Implemented:
 
@@ -49,14 +49,16 @@ Implemented:
 - Interactive managed-playlist selection persisted in SQLite.
 - TIDAL OAuth 2.1 Authorization Code + PKCE login flow.
 - Secret-safe local storage for TIDAL access and refresh tokens.
+- TIDAL JSON:API client for playlist create/read/delete operations.
+- Safe `tidal-write-test` command that creates, verifies, and deletes a temporary playlist.
 
 Next:
 
-1. Verify TIDAL access with a read call.
-2. Create and delete a safe `DJ Sync Test` playlist.
-3. Fetch Spotify playlist items and normalize track metadata.
-4. Match tracks by ISRC first, metadata fallback second.
-5. Create and populate managed TIDAL playlist mirrors.
+1. Fetch Spotify playlist items and normalize track metadata.
+2. Add TIDAL search and ISRC-first track matching.
+3. Add metadata fallback matching with confidence scoring.
+4. Create and populate managed TIDAL playlist mirrors.
+5. Implement delta sync for additions, removals, renames, and playlist lifecycle.
 
 ## Local setup
 
@@ -92,6 +94,12 @@ Connect TIDAL after creating a TIDAL Developer app and setting `TIDAL_CLIENT_ID`
 
 ```bash
 dj-sync tidal-login
+```
+
+Verify TIDAL playlist read/write/delete access without touching managed playlists:
+
+```bash
+dj-sync tidal-write-test
 ```
 
 Preview mode:

@@ -8,6 +8,7 @@ from dj_sync.playlist_selection import parse_selection
 from dj_sync.spotify.auth import SpotifyTokenStore, login_with_pkce
 from dj_sync.spotify.client import SpotifyClient, SpotifyPlaylist
 from dj_sync.tidal.auth import TidalTokenStore, login_with_pkce as tidal_login_with_pkce
+from dj_sync.tidal.client import TidalClient
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -23,6 +24,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("spotify-select", help="Choose which Spotify playlists DJ Sync manages.")
     subparsers.add_parser("managed-playlists", help="Show saved DJ Sync playlist selections.")
     subparsers.add_parser("tidal-login", help="Authorize DJ Sync with TIDAL.")
+    subparsers.add_parser(
+        "tidal-write-test",
+        help="Create, verify, and delete a temporary TIDAL playlist.",
+    )
 
     sync_parser = subparsers.add_parser("sync", help="Synchronize managed playlists.")
     sync_parser.add_argument(
@@ -38,6 +43,14 @@ def _spotify_token(settings: Settings):
     token = token_store.load()
     if token is None:
         raise RuntimeError("Spotify is not connected. Run: dj-sync spotify-login")
+    return token
+
+
+def _tidal_token(settings: Settings):
+    token_store = TidalTokenStore(settings.tidal_token_path)
+    token = token_store.load()
+    if token is None:
+        raise RuntimeError("TIDAL is not connected. Run: dj-sync tidal-login")
     return token
 
 
@@ -89,6 +102,33 @@ def main() -> int:
             token_store=token_store,
         )
         print("TIDAL connected successfully.")
+        return 0
+
+    if args.command == "tidal-write-test":
+        token = _tidal_token(settings)
+        client = TidalClient(token.access_token)
+        created_playlist = None
+
+        print("Creating temporary TIDAL playlist: DJ Sync Test")
+        try:
+            created_playlist = client.create_playlist(
+                "DJ Sync Test",
+                description="Temporary playlist created by DJ Sync to verify API write access.",
+            )
+            print(f"  ✓ Created [{created_playlist.id}]")
+
+            fetched_playlist = client.get_playlist(created_playlist.id)
+            if fetched_playlist.name != "DJ Sync Test":
+                raise RuntimeError(
+                    "TIDAL returned an unexpected playlist name during verification"
+                )
+            print("  ✓ Read-back verification passed")
+        finally:
+            if created_playlist is not None:
+                client.delete_playlist(created_playlist.id)
+                print("  ✓ Temporary playlist deleted")
+
+        print("TIDAL playlist write test passed.")
         return 0
 
     if args.command == "spotify-playlists":
