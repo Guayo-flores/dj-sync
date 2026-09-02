@@ -16,6 +16,7 @@ class SpotifyPlaylist:
     collaborative: bool
     owner_display_name: str | None
     item_count: int | None
+    can_read_items: bool
 
 
 class SpotifyClient:
@@ -50,6 +51,7 @@ class SpotifyClient:
                 if not item:
                     continue
                 owner = item.get("owner") or {}
+                has_items_summary = "items" in item and item.get("items") is not None
                 item_summary = item.get("items") or {}
                 yield SpotifyPlaylist(
                     id=item["id"],
@@ -58,6 +60,7 @@ class SpotifyClient:
                     collaborative=bool(item.get("collaborative", False)),
                     owner_display_name=owner.get("display_name"),
                     item_count=item_summary.get("total"),
+                    can_read_items=has_items_summary,
                 )
 
             if not payload.get("next") or not items:
