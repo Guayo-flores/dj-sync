@@ -143,3 +143,5 @@ pytest
 ## Security
 
 OAuth tokens, `.env`, and the local SQLite database are intentionally excluded from Git. No Spotify or TIDAL credentials should ever be committed to the repository.
+
+- Automatic TIDAL rate-limit pacing and retry handling during large ISRC imports.

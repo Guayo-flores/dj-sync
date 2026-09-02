@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+import time
+from typing import Any, Callable
 
 from dj_sync.matching.isrc import normalize_isrc
 from uuid import uuid4
@@ -56,11 +59,17 @@ class TidalClient:
         session: requests.Session | None = None,
         base_url: str = TIDAL_API_BASE_URL,
         timeout: float = 20.0,
+        max_rate_limit_retries: int = 6,
+        rate_limit_backoff_seconds: float = 2.0,
+        sleep_fn: Callable[[float], None] = time.sleep,
     ) -> None:
         self.access_token = access_token
         self.session = session or requests.Session()
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.max_rate_limit_retries = max_rate_limit_retries
+        self.rate_limit_backoff_seconds = rate_limit_backoff_seconds
+        self.sleep_fn = sleep_fn
 
     def _headers(self, *, mutation: bool = False) -> dict[str, str]:
         headers = {
@@ -71,6 +80,46 @@ class TidalClient:
         if mutation:
             headers["Idempotency-Key"] = str(uuid4())
         return headers
+
+    def _rate_limit_delay(self, response: requests.Response, attempt: int) -> float:
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                return max(0.0, float(retry_after))
+            except ValueError:
+                try:
+                    retry_at = parsedate_to_datetime(retry_after)
+                    if retry_at.tzinfo is None:
+                        retry_at = retry_at.replace(tzinfo=timezone.utc)
+                    return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+                except (TypeError, ValueError, OverflowError):
+                    pass
+
+        # TIDAL does not publish one fixed public request-per-second quota.
+        # When Retry-After is absent, back off exponentially and cap each wait
+        # so a large first-time library match can recover without hammering the API.
+        return min(self.rate_limit_backoff_seconds * (2**attempt), 30.0)
+
+    def _get_with_rate_limit_retry(
+        self, url: str, *, params: dict[str, Any] | None = None
+    ) -> requests.Response:
+        for attempt in range(self.max_rate_limit_retries + 1):
+            response = self.session.get(
+                url,
+                headers=self._headers(),
+                params=params,
+                timeout=self.timeout,
+            )
+            if response.status_code != 429:
+                response.raise_for_status()
+                return response
+
+            if attempt >= self.max_rate_limit_retries:
+                response.raise_for_status()
+
+            self.sleep_fn(self._rate_limit_delay(response, attempt))
+
+        raise RuntimeError("Unreachable TIDAL retry state")
 
     def create_playlist(
         self,
@@ -131,12 +180,9 @@ class TidalClient:
             if normalized not in normalized_isrcs:
                 normalized_isrcs.append(normalized)
 
-        response = self.session.get(
+        response = self._get_with_rate_limit_retry(
             f"{self.base_url}/tracks",
-            headers=self._headers(),
             params={"filter[isrc]": normalized_isrcs},
-            timeout=self.timeout,
         )
-        response.raise_for_status()
         data = response.json().get("data") or []
         return [TidalTrack.from_resource(resource) for resource in data]

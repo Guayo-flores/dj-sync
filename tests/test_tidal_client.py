@@ -9,6 +9,8 @@ class FakeResponse:
     def __init__(self, payload: dict[str, Any] | None = None) -> None:
         self.payload = payload or {}
         self.raise_for_status_called = False
+        self.status_code = 200
+        self.headers: dict[str, str] = {}
 
     def raise_for_status(self) -> None:
         self.raise_for_status_called = True
@@ -175,3 +177,48 @@ def test_get_tracks_by_isrc_rejects_malformed_isrc() -> None:
         assert "Invalid ISRC" in str(error)
     else:
         raise AssertionError("Expected ValueError")
+
+
+def test_get_tracks_by_isrc_retries_429_using_retry_after() -> None:
+    session = FakeSession()
+    first = session.queue({"errors": [{"status": "429"}]})
+    first.status_code = 429
+    first.headers = {"Retry-After": "3"}
+    second = session.queue({"data": []})
+    second.status_code = 200
+    second.headers = {}
+    sleeps: list[float] = []
+    client = TidalClient(
+        "access-123",
+        session=session,
+        sleep_fn=sleeps.append,
+    )
+
+    client.get_tracks_by_isrc(["USABC1234567"])
+
+    assert len(session.calls) == 2
+    assert sleeps == [3.0]
+
+
+def test_get_tracks_by_isrc_uses_exponential_backoff_without_retry_after() -> None:
+    session = FakeSession()
+    first = session.queue({"errors": [{"status": "429"}]})
+    first.status_code = 429
+    first.headers = {}
+    second = session.queue({"errors": [{"status": "429"}]})
+    second.status_code = 429
+    second.headers = {}
+    third = session.queue({"data": []})
+    third.status_code = 200
+    third.headers = {}
+    sleeps: list[float] = []
+    client = TidalClient(
+        "access-123",
+        session=session,
+        rate_limit_backoff_seconds=2.0,
+        sleep_fn=sleeps.append,
+    )
+
+    client.get_tracks_by_isrc(["USABC1234567"])
+
+    assert sleeps == [2.0, 4.0]

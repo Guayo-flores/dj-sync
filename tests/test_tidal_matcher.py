@@ -44,7 +44,9 @@ def test_isrc_matcher_batches_twenty_and_persists_matches_and_misses(tmp_path) -
         }
     )
 
-    summary = match_unmatched_tracks_by_isrc(client=client, database=database)
+    summary = match_unmatched_tracks_by_isrc(
+        client=client, database=database, batch_delay_seconds=0
+    )
 
     assert summary.candidates == 21
     assert summary.batches == 2
@@ -68,7 +70,9 @@ def test_isrc_matcher_normalizes_lowercase_before_tidal_lookup(tmp_path) -> None
         )
     client = FakeTidalClient({"USHM92249275": "tidal-lower"})
 
-    summary = match_unmatched_tracks_by_isrc(client=client, database=database)
+    summary = match_unmatched_tracks_by_isrc(
+        client=client, database=database, batch_delay_seconds=0
+    )
 
     assert client.calls == [["USHM92249275"]]
     assert summary.matched == 1
@@ -88,9 +92,29 @@ def test_isrc_matcher_marks_malformed_isrc_without_calling_tidal(tmp_path) -> No
         )
     client = FakeTidalClient({})
 
-    summary = match_unmatched_tracks_by_isrc(client=client, database=database)
+    summary = match_unmatched_tracks_by_isrc(
+        client=client, database=database, batch_delay_seconds=0
+    )
 
     assert client.calls == []
     assert summary.invalid == 1
     assert summary.batches == 0
     assert database.list_tracks_pending_isrc_match() == []
+
+
+def test_isrc_matcher_paces_batches(tmp_path) -> None:
+    database = Database(tmp_path / "dj_sync.db")
+    database.initialize()
+    seed_tracks(database, 21)
+    client = FakeTidalClient({})
+    sleeps: list[float] = []
+
+    summary = match_unmatched_tracks_by_isrc(
+        client=client,
+        database=database,
+        batch_delay_seconds=0.75,
+        sleep_fn=sleeps.append,
+    )
+
+    assert summary.batches == 2
+    assert sleeps == [0.75, 0.75]

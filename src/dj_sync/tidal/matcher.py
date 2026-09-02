@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from itertools import islice
+import time
+from typing import Callable
 
 from dj_sync.database.database import Database
 from dj_sync.matching.isrc import normalize_isrc
@@ -24,7 +26,12 @@ def _batched(items: list, size: int):
 
 
 def match_unmatched_tracks_by_isrc(
-    *, client: TidalClient, database: Database, limit: int | None = None
+    *,
+    client: TidalClient,
+    database: Database,
+    limit: int | None = None,
+    batch_delay_seconds: float = 0.75,
+    sleep_fn: Callable[[float], None] = time.sleep,
 ) -> IsrcMatchSummary:
     candidates = database.list_tracks_pending_isrc_match(limit=limit)
     matched = 0
@@ -70,6 +77,12 @@ def match_unmatched_tracks_by_isrc(
                 score=1.0,
             )
             matched += 1
+
+        # The initial library import can require dozens of TIDAL requests. Pace
+        # successful batches proactively; the client separately handles 429s
+        # with Retry-After/exponential backoff if the service still throttles us.
+        if batch_delay_seconds > 0:
+            sleep_fn(batch_delay_seconds)
 
     return IsrcMatchSummary(
         candidates=len(candidates),

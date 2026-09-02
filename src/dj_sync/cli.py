@@ -151,6 +151,10 @@ def main() -> int:
         database.initialize()
         token = _tidal_token(settings)
         client = TidalClient(token.access_token)
+        print(
+            "Matching is paced automatically; DJ Sync will wait and retry if "
+            "TIDAL rate-limits the initial library import."
+        )
         summary = match_unmatched_tracks_by_isrc(
             client=client, database=database, limit=args.limit
         )
