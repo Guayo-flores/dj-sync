@@ -35,7 +35,7 @@ The SQLite database separates:
 - `match_candidates`: ambiguous metadata matches held for manual review.
 - `sync_runs`: sync history and result counts.
 
-## Current milestone: 1.2 - Incremental Spotify-to-TIDAL sync
+## Current milestone: 1.3 - Safe unattended synchronization
 
 Implemented:
 
@@ -87,12 +87,14 @@ Implemented:
 - Spotify playlist renames are mirrored to already-managed TIDAL playlists.
 - Scoped `--playlist` sync mode enables controlled testing on a single managed playlist.
 - Post-write verification confirms the final TIDAL sequence exactly matches the mapped Spotify sequence.
+- Safe playlist lifecycle handling for rename, pause, missing-source detection, and explicit cleanup.
+- Automatic Spotify and TIDAL access-token refresh for long-lived local sessions and scheduled syncs.
 
 Next:
 
-1. Add safe pause/delete lifecycle handling for managed playlists.
-2. Add automatic OAuth token refresh for unattended scheduled runs.
-3. Add Windows Task Scheduler / cloud scheduling support.
+1. Add Windows Task Scheduler support for Wednesday/Saturday unattended syncs.
+2. Add structured sync history/logging for scheduled runs.
+3. Add a local dashboard for playlist status, review, and manual sync.
 
 ## Local setup
 

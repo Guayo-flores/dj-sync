@@ -12,7 +12,11 @@ from dj_sync.spotify.auth import (
 )
 from dj_sync.spotify.client import SpotifyClient, SpotifyPlaylist
 from dj_sync.spotify.ingest import ingest_managed_playlists
-from dj_sync.tidal.auth import TidalTokenStore, login_with_pkce as tidal_login_with_pkce
+from dj_sync.tidal.auth import (
+    TidalTokenStore,
+    login_with_pkce as tidal_login_with_pkce,
+    refresh_access_token as refresh_tidal_access_token,
+)
 from dj_sync.tidal.client import TidalClient
 from dj_sync.tidal.matcher import match_unmatched_tracks_by_isrc
 from dj_sync.tidal.manual_resolution import resolve_unmatched_tracks
@@ -126,12 +130,24 @@ def _spotify_client(settings: Settings) -> SpotifyClient:
     return SpotifyClient(token.access_token, token_refresher=refresh)
 
 
-def _tidal_token(settings: Settings):
+def _tidal_client(settings: Settings) -> TidalClient:
     token_store = TidalTokenStore(settings.tidal_token_path)
     token = token_store.load()
     if token is None:
         raise RuntimeError("TIDAL is not connected. Run: dj-sync tidal-login")
-    return token
+
+    def refresh() -> str:
+        current = token_store.load()
+        if current is None or not current.refresh_token:
+            raise RuntimeError(
+                "TIDAL session expired and no refresh token is available. "
+                "Run: dj-sync tidal-login"
+            )
+        refreshed = refresh_tidal_access_token(refresh_token=current.refresh_token)
+        token_store.save(refreshed)
+        return refreshed.access_token
+
+    return TidalClient(token.access_token, token_refresher=refresh)
 
 
 def _spotify_playlists(settings: Settings) -> list[SpotifyPlaylist]:
@@ -184,8 +200,7 @@ def main() -> int:
         return 0
 
     if args.command == "tidal-write-test":
-        token = _tidal_token(settings)
-        client = TidalClient(token.access_token)
+        client = _tidal_client(settings)
         created_playlist = None
 
         print("Creating temporary TIDAL playlist: DJ Sync Test")
@@ -212,8 +227,7 @@ def main() -> int:
 
     if args.command == "tidal-match-isrc":
         database.initialize()
-        token = _tidal_token(settings)
-        client = TidalClient(token.access_token)
+        client = _tidal_client(settings)
         print(
             "Matching is paced automatically; DJ Sync will wait and retry if "
             "TIDAL rate-limits the initial library import."
@@ -233,8 +247,7 @@ def main() -> int:
 
     if args.command == "tidal-match-metadata":
         database.initialize()
-        token = _tidal_token(settings)
-        client = TidalClient(token.access_token)
+        client = _tidal_client(settings)
         print(
             "Metadata fallback uses conservative auto-match rules; ambiguous "
             "remixes/edits are held for review."
@@ -274,8 +287,7 @@ def main() -> int:
 
     if args.command == "resolve-unmatched":
         database.initialize()
-        token = _tidal_token(settings)
-        client = TidalClient(token.access_token)
+        client = _tidal_client(settings)
         summary = resolve_unmatched_tracks(client=client, database=database)
         counts = database.track_match_counts()
         remaining = len(database.list_unmatched_tracks())
@@ -359,8 +371,7 @@ def main() -> int:
 
     if args.command == "playlist-cleanup":
         database.initialize()
-        token = _tidal_token(settings)
-        client = TidalClient(token.access_token)
+        client = _tidal_client(settings)
         summary = cleanup_pending_playlists(client=client, database=database)
         print("\nDJ Sync — Playlist cleanup summary")
         print(f"Deleted from TIDAL: {summary.deleted}")
@@ -380,8 +391,7 @@ def main() -> int:
         )
         ingest_summary = ingest_managed_playlists(client=spotify_client, database=database)
 
-        tidal_token = _tidal_token(settings)
-        tidal_client = TidalClient(tidal_token.access_token)
+        tidal_client = _tidal_client(settings)
 
         # Only newly seen/unmapped recordings flow through these passes. Existing
         # Spotify -> TIDAL mappings are reused globally across every playlist.

@@ -101,6 +101,7 @@ class TidalClient:
         max_rate_limit_retries: int = 6,
         rate_limit_backoff_seconds: float = 2.0,
         sleep_fn: Callable[[float], None] = time.sleep,
+        token_refresher: Callable[[], str] | None = None,
     ) -> None:
         self.access_token = access_token
         self.session = session or requests.Session()
@@ -109,6 +110,7 @@ class TidalClient:
         self.max_rate_limit_retries = max_rate_limit_retries
         self.rate_limit_backoff_seconds = rate_limit_backoff_seconds
         self.sleep_fn = sleep_fn
+        self.token_refresher = token_refresher
 
     def _headers(self, *, mutation: bool = False) -> dict[str, str]:
         headers = {
@@ -139,26 +141,44 @@ class TidalClient:
         # so a large first-time library match can recover without hammering the API.
         return min(self.rate_limit_backoff_seconds * (2**attempt), 30.0)
 
+    def _refresh_access_token_once(self) -> None:
+        if self.token_refresher is None:
+            raise RuntimeError(
+                "TIDAL session is no longer authorized. Run: dj-sync tidal-login"
+            )
+        self.access_token = self.token_refresher()
+
     def _get_with_rate_limit_retry(
         self, url: str, *, params: dict[str, Any] | None = None
     ) -> requests.Response:
-        for attempt in range(self.max_rate_limit_retries + 1):
+        rate_attempt = 0
+        auth_refreshed = False
+        while True:
             response = self.session.get(
                 url,
                 headers=self._headers(),
                 params=params,
                 timeout=self.timeout,
             )
+
+            # TIDAL user-resource requests can reject a stale user token. Refresh
+            # once, persist the new token through the callback, and replay the
+            # original request. A genuine permission error will still surface on
+            # the retried request instead of looping forever.
+            if response.status_code in {401, 403} and not auth_refreshed:
+                self._refresh_access_token_once()
+                auth_refreshed = True
+                continue
+
             if response.status_code != 429:
                 response.raise_for_status()
                 return response
 
-            if attempt >= self.max_rate_limit_retries:
+            if rate_attempt >= self.max_rate_limit_retries:
                 response.raise_for_status()
 
-            self.sleep_fn(self._rate_limit_delay(response, attempt))
-
-        raise RuntimeError("Unreachable TIDAL retry state")
+            self.sleep_fn(self._rate_limit_delay(response, rate_attempt))
+            rate_attempt += 1
 
     def _mutation_with_rate_limit_retry(
         self,
@@ -167,11 +187,16 @@ class TidalClient:
         *,
         json: dict[str, Any] | None = None,
     ) -> requests.Response:
-        # Generate the idempotency key once and reuse it across retries. TIDAL
-        # replays a completed mutation when the same key + payload is retried.
-        headers = self._headers(mutation=True)
+        # Generate the idempotency key once and reuse it across every retry,
+        # including an auth refresh. If TIDAL received the first mutation before
+        # the response failed, the same key prevents a duplicate write.
+        idempotency_key = str(uuid4())
         request = getattr(self.session, method.lower())
-        for attempt in range(self.max_rate_limit_retries + 1):
+        rate_attempt = 0
+        auth_refreshed = False
+        while True:
+            headers = self._headers()
+            headers["Idempotency-Key"] = idempotency_key
             kwargs: dict[str, Any] = {
                 "headers": headers,
                 "timeout": self.timeout,
@@ -179,16 +204,21 @@ class TidalClient:
             if json is not None:
                 kwargs["json"] = json
             response = request(url, **kwargs)
+
+            if response.status_code in {401, 403} and not auth_refreshed:
+                self._refresh_access_token_once()
+                auth_refreshed = True
+                continue
+
             if response.status_code != 429:
                 response.raise_for_status()
                 return response
 
-            if attempt >= self.max_rate_limit_retries:
+            if rate_attempt >= self.max_rate_limit_retries:
                 response.raise_for_status()
 
-            self.sleep_fn(self._rate_limit_delay(response, attempt))
-
-        raise RuntimeError("Unreachable TIDAL retry state")
+            self.sleep_fn(self._rate_limit_delay(response, rate_attempt))
+            rate_attempt += 1
 
     def create_playlist(
         self,
@@ -217,12 +247,9 @@ class TidalClient:
         return TidalPlaylist.from_resource(response.json()["data"])
 
     def get_playlist(self, playlist_id: str) -> TidalPlaylist:
-        response = self.session.get(
-            f"{self.base_url}/playlists/{playlist_id}",
-            headers=self._headers(),
-            timeout=self.timeout,
+        response = self._get_with_rate_limit_retry(
+            f"{self.base_url}/playlists/{playlist_id}"
         )
-        response.raise_for_status()
         return TidalPlaylist.from_resource(response.json()["data"])
 
     def delete_playlist(self, playlist_id: str) -> None:
